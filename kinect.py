@@ -328,17 +328,22 @@ class KinectSource:
 
     @staticmethod
     def _ir_to_bgr(gray: np.ndarray | None) -> np.ndarray | None:
-        """Convert raw IR grayscale to green-tinted BGR for display/detection."""
+        """
+        Convert raw IR grayscale to a 3-channel BGR frame for display and
+        face detection. No colour tint — pure IR sensor output with CLAHE
+        contrast enhancement so dark scenes are visible.
+        """
         if gray is None:
             return None
         import cv2
+        # Scale 10-bit down to 8-bit if needed
         if gray.dtype != np.uint8:
             gray = np.clip(gray.astype(np.float32) / 4.0, 0, 255).astype(np.uint8)
-        clahe   = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        eq      = clahe.apply(gray)
-        zeros   = np.zeros_like(eq)
-        blue    = (eq.astype(np.uint16) * 30 // 100).astype(np.uint8)
-        return cv2.merge([blue, eq, zeros])
+        # CLAHE to stretch local contrast — makes faces pop in IR
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        eq    = clahe.apply(gray)
+        # Return as BGR with all channels identical (true grayscale)
+        return cv2.cvtColor(eq, cv2.COLOR_GRAY2BGR)
 
     def _open_motor(self) -> None:
         """Open a device handle for motor/LED control."""

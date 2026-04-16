@@ -120,18 +120,6 @@ def _apply_night_vision(frame: np.ndarray) -> np.ndarray:
     return cv2.merge([blue, gray_dn, zeros])
 
 
-def _apply_ir_tint(frame: np.ndarray) -> np.ndarray:
-    """
-    Apply green phosphor tint to a Kinect IR frame (already bright grayscale).
-    Much simpler than the webcam NV filter — no gamma boost needed.
-    """
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    gray_eq = clahe.apply(gray)
-    zeros = np.zeros_like(gray_eq)
-    blue  = (gray_eq.astype(np.uint16) * 30 // 100).astype(np.uint8)
-    return cv2.merge([blue, gray_eq, zeros])
-
 
 _night_vision_active = False
 
@@ -338,8 +326,8 @@ class CameraLoop:
                             self._kinect_settle = 6
                             logger.info("Kinect → RGB mode (brightness=%.1f)", gray_mean)
 
-                    # kinect.read_frame() already returns green-tinted BGR in IR mode
-                    # and normal BGR in RGB mode — no further processing needed
+                    # kinect.read_frame() returns plain BGR in RGB mode and
+                    # CLAHE-enhanced grayscale-as-BGR in IR mode — no further processing
                     display_frame = frame
                 else:
                     # Webcam: software NV filter
