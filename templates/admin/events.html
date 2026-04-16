@@ -1,0 +1,90 @@
+{% extends "admin/layout.html" %}
+{% block title %}Events{% endblock %}
+{% block page_title %}
+  <i class="bi bi-activity me-2"></i>
+  {% if filter_type == 'unknown' %}Unknown Detections
+  {% elif filter_type == 'recognized' %}Recognized Detections
+  {% else %}All Events{% endif %}
+{% endblock %}
+
+{% block content %}
+
+<!-- Filter tabs -->
+<ul class="nav nav-pills mb-3">
+  <li class="nav-item">
+    <a class="nav-link {% if filter_type == 'all' %}active{% endif %}"
+       href="{{ url_for('admin.events') }}">All</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if filter_type == 'unknown' %}active{% endif %}"
+       href="{{ url_for('admin.events_unknown') }}">
+      <span class="badge bg-danger me-1">{{ events|selectattr('event_type','eq','unknown')|list|length }}</span>Unknown
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if filter_type == 'recognized' %}active{% endif %}"
+       href="{{ url_for('admin.events_recognized') }}">Recognized</a>
+  </li>
+</ul>
+
+<div class="card cs-card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-dark table-hover table-sm mb-0">
+        <thead class="table-secondary">
+          <tr>
+            <th class="col-hide-mobile">#</th>
+            <th>Type</th>
+            <th class="col-hide-mobile">Person</th>
+            <th class="col-hide-mobile">Confidence</th>
+            <th>Snapshot</th>
+            <th>Recording</th>
+            <th class="col-hide-mobile">Webhook</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ev in events %}
+          <tr>
+            <td class="col-hide-mobile"><small class="text-muted">{{ ev.id }}</small></td>
+            <td>
+              {% if ev.event_type == 'unknown' %}
+                <span class="badge bg-danger">Unknown</span>
+              {% else %}
+                <span class="badge bg-success">Recognized</span>
+              {% endif %}
+            </td>
+            <td class="col-hide-mobile">{{ ev.person_name or '—' }}</td>
+            <td class="col-hide-mobile">{{ '%.3f'|format(ev.confidence) if ev.confidence else '—' }}</td>
+            <td>
+              {% if ev.snapshot_path %}
+                <a href="{{ url_for('admin.serve_snapshot', filename=ev.snapshot_path|basename) }}"
+                   target="_blank" class="btn btn-xs btn-outline-secondary btn-sm py-0 px-1">
+                  <i class="bi bi-image"></i>
+                </a>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if ev.recording_path %}
+                <i class="bi bi-check-circle-fill text-success"></i>
+              {% else %}—{% endif %}
+            </td>
+            <td class="col-hide-mobile">
+              {% if ev.webhook_sent %}
+                <i class="bi bi-check-circle-fill text-success"></i>
+              {% elif ev.webhook_error %}
+                <i class="bi bi-x-circle-fill text-danger" title="{{ ev.webhook_error }}"></i>
+              {% else %}—{% endif %}
+            </td>
+            <td><small>{{ ev.occurred_at }}</small></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="text-center text-muted py-4">No events found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

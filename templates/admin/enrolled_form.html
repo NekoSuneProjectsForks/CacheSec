@@ -1,0 +1,43 @@
+{% extends "admin/layout.html" %}
+{% block title %}{{ 'Edit' if person else 'Add' }} Person{% endblock %}
+{% block page_title %}
+  <i class="bi bi-person-plus-fill me-2"></i>
+  {{ 'Edit Person' if person else 'Add Person' }}
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header">Person Details</div>
+      <div class="card-body">
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label">Full Name *</label>
+            <input type="text" name="name" class="form-control bg-secondary border-secondary text-light"
+                   value="{{ person.name if person else '' }}" required maxlength="120">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Notes</label>
+            <textarea name="notes" class="form-control bg-secondary border-secondary text-light"
+                      rows="3" maxlength="500">{{ person.notes if person else '' }}</textarea>
+          </div>
+          {% if person %}
+          <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="is_active" name="is_active"
+                   {{ 'checked' if person.is_active else '' }}>
+            <label class="form-check-label" for="is_active">Active (included in recognition)</label>
+          </div>
+          {% endif %}
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-danger">
+              <i class="bi bi-check-circle me-1"></i>Save
+            </button>
+            <a href="{{ url_for('admin.enrolled') }}" class="btn btn-outline-secondary">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

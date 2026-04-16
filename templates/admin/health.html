@@ -1,0 +1,78 @@
+{% extends "admin/layout.html" %}
+{% block title %}System Health{% endblock %}
+{% block page_title %}<i class="bi bi-heart-pulse-fill me-2"></i>System Health{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+
+  <!-- Camera -->
+  <div class="col-md-6">
+    <div class="card cs-card h-100">
+      <div class="card-header cs-card-header">Camera</div>
+      <div class="card-body">
+        <p>
+          <strong>Status:</strong>
+          {% if cam_status.running %}
+            <span class="badge bg-success ms-1">Running</span>
+          {% else %}
+            <span class="badge bg-danger ms-1">Stopped</span>
+          {% endif %}
+        </p>
+        {% if cam_status.error %}
+        <p><strong>Error:</strong> <span class="text-danger">{{ cam_status.error }}</span></p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Recording -->
+  <div class="col-md-6">
+    <div class="card cs-card h-100">
+      <div class="card-header cs-card-header">Recorder</div>
+      <div class="card-body">
+        <p>
+          <strong>Recording:</strong>
+          {% if rec_state.is_recording %}
+            <span class="badge bg-danger ms-1 blink-dot">REC</span>
+            <small class="ms-2">{{ rec_state.filename }} ({{ rec_state.duration_seconds }}s)</small>
+          {% else %}
+            <span class="badge bg-secondary ms-1">Idle</span>
+          {% endif %}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Storage -->
+  <div class="col-md-6">
+    <div class="card cs-card h-100">
+      <div class="card-header cs-card-header">Storage</div>
+      <div class="card-body">
+        <p><strong>Recordings dir:</strong> <code>{{ recordings_dir }}</code></p>
+        <p><strong>Snapshots dir:</strong> <code>{{ snapshots_dir }}</code></p>
+        <p><strong>Uploads dir:</strong> <code>{{ uploads_dir }}</code></p>
+        <p><strong>Media total:</strong> {{ storage_mb }} MB</p>
+        <div class="d-flex justify-content-between">
+          <strong>Disk usage:</strong> <span>{{ disk_pct }}%</span>
+        </div>
+        <div class="progress mt-1" style="height:8px;">
+          <div class="progress-bar {% if disk_pct > 85 %}bg-danger{% elif disk_pct > 65 %}bg-warning{% else %}bg-success{% endif %}"
+               style="width:{{ disk_pct }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Runtime -->
+  <div class="col-md-6">
+    <div class="card cs-card h-100">
+      <div class="card-header cs-card-header">Runtime</div>
+      <div class="card-body">
+        <p><strong>Python:</strong> <code>{{ python_version }}</code></p>
+        <p class="mb-0"><strong>Platform:</strong> <code>{{ platform_info }}</code></p>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

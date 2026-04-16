@@ -1,0 +1,775 @@
+"""
+admin.py — Flask Blueprint for the admin dashboard.
+
+Routes:
+  /                  → dashboard overview
+  /live              → live camera feed
+  /events            → all events
+  /events/unknown    → unknown detections
+  /events/recognized → recognized detections
+  /recordings        → saved recordings
+  /recordings/<id>/delete
+  /enrolled          → enrolled people list
+  /enrolled/add
+  /enrolled/<id>     → person detail + images
+  /enrolled/<id>/edit
+  /enrolled/<id>/delete
+  /enrolled/<id>/upload
+  /enrolled/<id>/retrain
+  /users             → user management (admin only)
+  /users/add
+  /users/<id>/edit
+  /users/<id>/delete
+  /users/<id>/toggle
+  /settings          → app settings
+  /audit             → audit log
+  /health            → system health
+  /api/status        → JSON status for dashboard widgets
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+from flask import (
+    Blueprint, render_template, redirect, url_for, request,
+    flash, session, send_from_directory, Response, jsonify,
+    abort, current_app,
+)
+
+import config
+import models
+from auth import (
+    login_required, admin_required, operator_required, viewer_required,
+    hash_password, current_user,
+)
+from database import get_db, set_setting, get_setting
+from utils import (
+    secure_name, allowed_image, timestamped_filename,
+    dir_size_mb, disk_usage_percent, audit, get_client_ip,
+)
+
+logger = logging.getLogger(__name__)
+
+admin_bp = Blueprint("admin", __name__)
+
+# ---------------------------------------------------------------------------
+# Dashboard overview
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/")
+@viewer_required
+def dashboard():
+    db   = get_db()
+    unkn = models.count_events_today(db, "unknown")
+    recg = models.count_events_today(db, "recognized")
+    enrolled_count = len(models.get_all_enrolled(db))
+    user_count     = len(models.get_all_users(db))
+    recordings     = models.get_all_recordings(db)
+    recent_events  = models.get_recent_events(db, limit=10)
+
+    from camera import get_camera_status
+    from recorder import get_recorder
+    cam_status = get_camera_status()
+    rec_state  = get_recorder().get_state()
+
+    storage_mb = dir_size_mb(config.RECORDINGS_DIR) + dir_size_mb(config.SNAPSHOTS_DIR)
+    disk_pct   = disk_usage_percent("/")
+
+    return render_template(
+        "admin/dashboard.html",
+        unknown_today=unkn,
+        recognized_today=recg,
+        enrolled_count=enrolled_count,
+        user_count=user_count,
+        recording_count=len([r for r in recordings]),
+        cam_status=cam_status,
+        rec_state=rec_state,
+        recent_events=recent_events,
+        storage_mb=round(storage_mb, 1),
+        disk_pct=disk_pct,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live feed
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/live")
+@operator_required
+def live_feed():
+    return render_template("admin/live.html")
+
+
+@admin_bp.route("/live/stream")
+@operator_required
+def live_stream():
+    from camera import generate_mjpeg
+    return Response(
+        generate_mjpeg(),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Events
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/events")
+@operator_required
+def events():
+    db     = get_db()
+    rows   = models.get_recent_events(db, limit=200)
+    return render_template("admin/events.html", events=rows, filter_type="all")
+
+
+@admin_bp.route("/events/unknown")
+@operator_required
+def events_unknown():
+    db   = get_db()
+    rows = get_db().execute(
+        "SELECT * FROM events WHERE event_type='unknown' ORDER BY occurred_at DESC LIMIT 200"
+    ).fetchall()
+    return render_template("admin/events.html", events=rows, filter_type="unknown")
+
+
+@admin_bp.route("/events/recognized")
+@operator_required
+def events_recognized():
+    rows = get_db().execute(
+        "SELECT * FROM events WHERE event_type='recognized' ORDER BY occurred_at DESC LIMIT 200"
+    ).fetchall()
+    return render_template("admin/events.html", events=rows, filter_type="recognized")
+
+
+# ---------------------------------------------------------------------------
+# Recordings
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/recordings")
+@operator_required
+def recordings():
+    rows = models.get_all_recordings(get_db())
+    return render_template("admin/recordings.html", recordings=rows)
+
+
+@admin_bp.route("/recordings/<int:rec_id>/delete", methods=["POST"])
+@admin_required
+def delete_recording(rec_id: int):
+    db  = get_db()
+    row = db.execute("SELECT * FROM recordings WHERE id=?", (rec_id,)).fetchone()
+    if not row:
+        abort(404)
+    fpath = Path(config.RECORDINGS_DIR) / row["filename"]
+    try:
+        fpath.unlink(missing_ok=True)
+    except OSError as exc:
+        flash(f"File delete error: {exc}", "warning")
+
+    models.soft_delete_recording(db, rec_id, deleted_by=session["user_id"])
+    audit(
+        "RECORDING_DELETED",
+        user_id=session["user_id"],
+        username=session["username"],
+        target_type="recording",
+        target_id=str(rec_id),
+        ip_address=get_client_ip(),
+    )
+    flash("Recording deleted.", "success")
+    return redirect(url_for("admin.recordings"))
+
+
+@admin_bp.route("/recordings/<path:filename>")
+@operator_required
+def serve_recording(filename: str):
+    # Prevent path traversal
+    safe = Path(filename).name
+    ext  = safe.rsplit(".", 1)[-1].lower()
+    mime = "video/mp4" if ext == "mp4" else "video/x-msvideo"
+    # conditional=True enables Range requests — required for browser seek/scrub
+    return send_from_directory(
+        config.RECORDINGS_DIR, safe, mimetype=mime, conditional=True
+    )
+
+
+@admin_bp.route("/snapshots/<path:filename>")
+@operator_required
+def serve_snapshot(filename: str):
+    safe = Path(filename).name
+    return send_from_directory(config.SNAPSHOTS_DIR, safe)
+
+
+# ---------------------------------------------------------------------------
+# Enrolled people
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/enrolled")
+@operator_required
+def enrolled():
+    rows = models.get_all_enrolled(get_db())
+    return render_template("admin/enrolled.html", people=rows)
+
+
+@admin_bp.route("/enrolled/add", methods=["GET", "POST"])
+@admin_required
+def enrolled_add():
+    if request.method == "POST":
+        name  = request.form.get("name", "").strip()
+        notes = request.form.get("notes", "").strip()
+        if not name:
+            flash("Name is required.", "danger")
+            return render_template("admin/enrolled_form.html", person=None)
+
+        person_id = models.create_enrolled_person(
+            get_db(), name=name, notes=notes, created_by=session["user_id"]
+        )
+        audit(
+            "ENROLLED_PERSON_ADDED",
+            user_id=session["user_id"],
+            username=session["username"],
+            target_type="enrolled_person",
+            target_id=str(person_id),
+            detail=f"name={name}",
+            ip_address=get_client_ip(),
+        )
+        flash(f"Person '{name}' added. Now upload face images.", "success")
+        return redirect(url_for("admin.enrolled_detail", person_id=person_id))
+
+    return render_template("admin/enrolled_form.html", person=None)
+
+
+@admin_bp.route("/enrolled/<int:person_id>")
+@operator_required
+def enrolled_detail(person_id: int):
+    db     = get_db()
+    person = models.get_enrolled_by_id(db, person_id)
+    if not person:
+        abort(404)
+    images = models.get_images_for_person(db, person_id)
+    return render_template("admin/enrolled_detail.html", person=person, images=images)
+
+
+@admin_bp.route("/enrolled/<int:person_id>/edit", methods=["GET", "POST"])
+@admin_required
+def enrolled_edit(person_id: int):
+    db     = get_db()
+    person = models.get_enrolled_by_id(db, person_id)
+    if not person:
+        abort(404)
+
+    if request.method == "POST":
+        name  = request.form.get("name", "").strip()
+        notes = request.form.get("notes", "").strip()
+        active = 1 if request.form.get("is_active") else 0
+        if not name:
+            flash("Name is required.", "danger")
+        else:
+            models.update_enrolled_person(db, person_id, name=name, notes=notes, is_active=active)
+            audit("ENROLLED_PERSON_UPDATED", user_id=session["user_id"],
+                  username=session["username"], target_type="enrolled_person",
+                  target_id=str(person_id), ip_address=get_client_ip())
+            flash("Person updated.", "success")
+            return redirect(url_for("admin.enrolled_detail", person_id=person_id))
+
+    return render_template("admin/enrolled_form.html", person=person)
+
+
+@admin_bp.route("/enrolled/<int:person_id>/delete", methods=["POST"])
+@admin_required
+def enrolled_delete(person_id: int):
+    db     = get_db()
+    person = models.get_enrolled_by_id(db, person_id)
+    if not person:
+        abort(404)
+
+    # Delete uploaded images from disk
+    for img in models.get_images_for_person(db, person_id):
+        try:
+            Path(config.UPLOAD_FOLDER, img["filename"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    models.delete_enrolled_person(db, person_id)
+    audit("ENROLLED_PERSON_DELETED", user_id=session["user_id"],
+          username=session["username"], target_type="enrolled_person",
+          target_id=str(person_id), detail=f"name={person['name']}",
+          ip_address=get_client_ip())
+
+    from recognition import reload_gallery
+    reload_gallery()
+
+    flash(f"Person '{person['name']}' deleted.", "success")
+    return redirect(url_for("admin.enrolled"))
+
+
+@admin_bp.route("/enrolled/<int:person_id>/upload", methods=["POST"])
+@admin_required
+def enrolled_upload(person_id: int):
+    db     = get_db()
+    person = models.get_enrolled_by_id(db, person_id)
+    if not person:
+        abort(404)
+
+    files = request.files.getlist("images")
+    if not files or all(f.filename == "" for f in files):
+        flash("No files selected.", "warning")
+        return redirect(url_for("admin.enrolled_detail", person_id=person_id))
+
+    saved = 0
+    errors = []
+
+    for file in files:
+        if not file.filename:
+            continue
+        if not allowed_image(file.filename):
+            errors.append(f"{file.filename}: unsupported file type")
+            continue
+
+        fname  = f"person{person_id}_{timestamped_filename('face', 'jpg')}"
+        fpath  = Path(config.UPLOAD_FOLDER) / fname
+
+        try:
+            file.save(str(fpath))
+        except OSError as exc:
+            errors.append(f"{file.filename}: save error ({exc})")
+            continue
+
+        # Generate embedding
+        try:
+            from recognition import get_recognizer, serialise_embedding
+            rec  = get_recognizer()
+            embs = rec.embed_image_bytes(fpath.read_bytes())
+            if not embs:
+                fpath.unlink(missing_ok=True)
+                errors.append(f"{file.filename}: no face detected in image")
+                continue
+
+            image_id = models.add_enrolled_image(
+                db, person_id=person_id, filename=fname,
+                uploaded_by=session["user_id"],
+            )
+            for emb in embs:
+                models.add_embedding(
+                    db, person_id=person_id, image_id=image_id,
+                    embedding_bytes=serialise_embedding(emb),
+                )
+            saved += 1
+
+        except Exception as exc:
+            logger.exception("Embedding error for %s", file.filename)
+            errors.append(f"{file.filename}: embedding error ({exc})")
+            fpath.unlink(missing_ok=True)
+
+    if saved:
+        from recognition import reload_gallery
+        reload_gallery()
+        audit("FACE_IMAGES_UPLOADED", user_id=session["user_id"],
+              username=session["username"], target_type="enrolled_person",
+              target_id=str(person_id), detail=f"{saved} image(s) uploaded",
+              ip_address=get_client_ip())
+        flash(f"{saved} image(s) uploaded and embedded.", "success")
+
+    for err in errors:
+        flash(err, "warning")
+
+    return redirect(url_for("admin.enrolled_detail", person_id=person_id))
+
+
+@admin_bp.route("/enrolled/<int:person_id>/image/<int:image_id>/delete", methods=["POST"])
+@admin_required
+def enrolled_image_delete(person_id: int, image_id: int):
+    db  = get_db()
+    img = db.execute("SELECT * FROM enrolled_images WHERE id=? AND person_id=?",
+                     (image_id, person_id)).fetchone()
+    if not img:
+        abort(404)
+    try:
+        Path(config.UPLOAD_FOLDER, img["filename"]).unlink(missing_ok=True)
+    except OSError:
+        pass
+    models.delete_enrolled_image(db, image_id)
+    from recognition import reload_gallery
+    reload_gallery()
+    flash("Image deleted.", "success")
+    return redirect(url_for("admin.enrolled_detail", person_id=person_id))
+
+
+@admin_bp.route("/enrolled/<int:person_id>/capture_preview")
+@admin_required
+def enrolled_capture_preview(person_id: int):
+    """Return the current camera frame as a JPEG for the capture UI preview."""
+    from camera import get_latest_jpeg
+    jpeg = get_latest_jpeg()
+    if not jpeg:
+        abort(503)
+    return Response(jpeg, mimetype="image/jpeg")
+
+
+@admin_bp.route("/enrolled/<int:person_id>/capture", methods=["POST"])
+@admin_required
+def enrolled_capture(person_id: int):
+    """
+    Grab the current live frame, save it as a face image, generate embedding,
+    and enroll it. Returns JSON so the page can update without a full reload.
+    """
+    import cv2
+    import numpy as np
+    from camera import get_latest_jpeg
+    from recognition import get_recognizer, serialise_embedding, reload_gallery
+
+    db     = get_db()
+    person = models.get_enrolled_by_id(db, person_id)
+    if not person:
+        return jsonify({"ok": False, "error": "Person not found"}), 404
+
+    jpeg = get_latest_jpeg()
+    if not jpeg:
+        return jsonify({"ok": False, "error": "No camera frame available — is the camera running?"}), 503
+
+    # Decode frame
+    nparr = np.frombuffer(jpeg, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        return jsonify({"ok": False, "error": "Could not decode camera frame"}), 500
+
+    # Detect and embed
+    rec   = get_recognizer()
+    faces = rec.detect(frame)
+    if not faces:
+        return jsonify({"ok": False, "error": "No face detected in frame. Move closer to the camera."}), 400
+
+    if len(faces) > 1:
+        return jsonify({"ok": False, "error": f"{len(faces)} faces detected — only one person should be in frame."}), 400
+
+    face = faces[0]
+    if face.embedding is None:
+        return jsonify({"ok": False, "error": "Face detected but embedding failed."}), 500
+
+    # Draw a tight box on the saved image so it's clear what was captured
+    annotated = frame.copy()
+    x1, y1, x2, y2 = face.bbox
+    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 200, 80), 2)
+
+    # Save the annotated capture as the enrolled image
+    fname = f"person{person_id}_{timestamped_filename('capture', 'jpg')}"
+    fpath = Path(config.UPLOAD_FOLDER) / fname
+    cv2.imwrite(str(fpath), annotated, [cv2.IMWRITE_JPEG_QUALITY, 92])
+
+    # Store in DB
+    image_id = models.add_enrolled_image(
+        db, person_id=person_id, filename=fname,
+        uploaded_by=session["user_id"],
+    )
+    models.add_embedding(
+        db, person_id=person_id, image_id=image_id,
+        embedding_bytes=serialise_embedding(face.embedding),
+    )
+    reload_gallery()
+
+    audit(
+        "FACE_CAPTURED",
+        user_id=session["user_id"],
+        username=session["username"],
+        target_type="enrolled_person",
+        target_id=str(person_id),
+        detail=f"Live capture: {fname}  det_score={face.det_score:.3f}",
+        ip_address=get_client_ip(),
+    )
+
+    return jsonify({
+        "ok":        True,
+        "filename":  fname,
+        "det_score": round(face.det_score, 3),
+        "bbox":      list(face.bbox),
+        "image_url": url_for("admin.serve_face", filename=fname),
+    })
+
+
+@admin_bp.route("/enrolled/<int:person_id>/retrain", methods=["POST"])
+@admin_required
+def enrolled_retrain(person_id: int):
+    """Re-generate embeddings for all images of a person."""
+    db     = get_db()
+    person = models.get_enrolled_by_id(db, person_id)
+    if not person:
+        abort(404)
+
+    models.delete_embeddings_for_person(db, person_id)
+    images = models.get_images_for_person(db, person_id)
+
+    from recognition import get_recognizer, serialise_embedding
+    rec = get_recognizer()
+    rebuilt = 0
+
+    for img in images:
+        fpath = Path(config.UPLOAD_FOLDER) / img["filename"]
+        if not fpath.exists():
+            continue
+        try:
+            embs = rec.embed_image_bytes(fpath.read_bytes())
+            for emb in embs:
+                models.add_embedding(
+                    db, person_id=person_id, image_id=img["id"],
+                    embedding_bytes=serialise_embedding(emb),
+                )
+            rebuilt += 1
+        except Exception as exc:
+            logger.warning("Retrain error for image %s: %s", img["filename"], exc)
+
+    from recognition import reload_gallery
+    reload_gallery()
+    audit("EMBEDDINGS_REBUILT", user_id=session["user_id"],
+          username=session["username"], target_type="enrolled_person",
+          target_id=str(person_id), detail=f"{rebuilt} image(s) reprocessed",
+          ip_address=get_client_ip())
+    flash(f"Retrained {rebuilt} image(s).", "success")
+    return redirect(url_for("admin.enrolled_detail", person_id=person_id))
+
+
+# ---------------------------------------------------------------------------
+# User management (admin only)
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/users")
+@admin_required
+def users():
+    rows = models.get_all_users(get_db())
+    return render_template("admin/users.html", users=rows)
+
+
+@admin_bp.route("/users/add", methods=["GET", "POST"])
+@admin_required
+def user_add():
+    db    = get_db()
+    roles = models.get_all_roles(db)
+
+    if request.method == "POST":
+        username     = request.form.get("username", "").strip()
+        display_name = request.form.get("display_name", "").strip()
+        email        = request.form.get("email", "").strip()
+        password     = request.form.get("password", "")
+        role_id      = request.form.get("role_id", type=int)
+
+        errors = []
+        if not username:
+            errors.append("Username is required.")
+        if not password or len(password) < 8:
+            errors.append("Password must be at least 8 characters.")
+        if not role_id:
+            errors.append("Role is required.")
+        if models.get_user_by_username(db, username):
+            errors.append("Username already exists.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("admin/user_form.html", user=None, roles=roles)
+
+        uid = models.create_user(
+            db, username=username, password_hash=hash_password(password),
+            role_id=role_id, display_name=display_name, email=email,
+            created_by=session["user_id"],
+        )
+        audit("USER_CREATED", user_id=session["user_id"],
+              username=session["username"], target_type="user",
+              target_id=str(uid), detail=f"username={username}",
+              ip_address=get_client_ip())
+        flash(f"User '{username}' created.", "success")
+        return redirect(url_for("admin.users"))
+
+    return render_template("admin/user_form.html", user=None, roles=roles)
+
+
+@admin_bp.route("/users/<int:user_id>/edit", methods=["GET", "POST"])
+@admin_required
+def user_edit(user_id: int):
+    db    = get_db()
+    user  = models.get_user_by_id(db, user_id)
+    roles = models.get_all_roles(db)
+    if not user:
+        abort(404)
+
+    if request.method == "POST":
+        display_name = request.form.get("display_name", "").strip()
+        email        = request.form.get("email", "").strip()
+        role_id      = request.form.get("role_id", type=int)
+        new_password = request.form.get("new_password", "").strip()
+
+        updates = dict(display_name=display_name, email=email or None, role_id=role_id)
+        if new_password:
+            if len(new_password) < 8:
+                flash("Password must be at least 8 characters.", "danger")
+                return render_template("admin/user_form.html", user=user, roles=roles)
+            updates["password_hash"] = hash_password(new_password)
+
+        models.update_user(db, user_id, **updates)
+        audit("USER_UPDATED", user_id=session["user_id"],
+              username=session["username"], target_type="user",
+              target_id=str(user_id), ip_address=get_client_ip())
+        flash("User updated.", "success")
+        return redirect(url_for("admin.users"))
+
+    return render_template("admin/user_form.html", user=user, roles=roles)
+
+
+@admin_bp.route("/users/<int:user_id>/toggle", methods=["POST"])
+@admin_required
+def user_toggle(user_id: int):
+    db   = get_db()
+    user = models.get_user_by_id(db, user_id)
+    if not user:
+        abort(404)
+    if user_id == session["user_id"]:
+        flash("You cannot disable your own account.", "danger")
+        return redirect(url_for("admin.users"))
+
+    new_state = 0 if user["is_active"] else 1
+    models.update_user(db, user_id, is_active=new_state)
+    label = "enabled" if new_state else "disabled"
+    audit(f"USER_{label.upper()}", user_id=session["user_id"],
+          username=session["username"], target_type="user",
+          target_id=str(user_id), ip_address=get_client_ip())
+    flash(f"User '{user['username']}' {label}.", "success")
+    return redirect(url_for("admin.users"))
+
+
+@admin_bp.route("/users/<int:user_id>/delete", methods=["POST"])
+@admin_required
+def user_delete(user_id: int):
+    db   = get_db()
+    user = models.get_user_by_id(db, user_id)
+    if not user:
+        abort(404)
+    if user_id == session["user_id"]:
+        flash("You cannot delete your own account.", "danger")
+        return redirect(url_for("admin.users"))
+
+    models.delete_user(db, user_id)
+    audit("USER_DELETED", user_id=session["user_id"],
+          username=session["username"], target_type="user",
+          target_id=str(user_id), detail=f"username={user['username']}",
+          ip_address=get_client_ip())
+    flash(f"User '{user['username']}' deleted.", "success")
+    return redirect(url_for("admin.users"))
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/settings", methods=["GET", "POST"])
+@admin_required
+def settings():
+    db = get_db()
+
+    _setting_keys = [
+        "recognition_threshold",
+        "frame_skip",
+        "unknown_cooldown_seconds",
+        "min_recording_seconds",
+        "max_recording_seconds",
+        "discord_cooldown_seconds",
+        "discord_webhook_url",
+        "sound_enabled",
+    ]
+
+    if request.method == "POST":
+        for key in _setting_keys:
+            val = request.form.get(key, "").strip()
+            if val is not None:
+                set_setting(key, val, user_id=session["user_id"])
+
+        audit("SETTINGS_CHANGED", user_id=session["user_id"],
+              username=session["username"], ip_address=get_client_ip())
+        flash("Settings saved.", "success")
+        return redirect(url_for("admin.settings"))
+
+    current = {k: get_setting(k) for k in _setting_keys}
+    return render_template("admin/settings.html", settings=current)
+
+
+# ---------------------------------------------------------------------------
+# Audit log
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/audit")
+@admin_required
+def audit_log():
+    rows = models.get_audit_log(get_db(), limit=300)
+    return render_template("admin/audit.html", entries=rows)
+
+
+# ---------------------------------------------------------------------------
+# System health
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/health")
+@operator_required
+def health():
+    from camera import get_camera_status
+    from recorder import get_recorder
+    import platform, sys
+
+    cam_status = get_camera_status()
+    rec_state  = get_recorder().get_state()
+    disk_pct   = disk_usage_percent("/")
+    storage_mb = dir_size_mb(config.RECORDINGS_DIR) + dir_size_mb(config.SNAPSHOTS_DIR)
+
+    return render_template(
+        "admin/health.html",
+        cam_status=cam_status,
+        rec_state=rec_state,
+        disk_pct=disk_pct,
+        storage_mb=round(storage_mb, 1),
+        python_version=sys.version,
+        platform_info=platform.platform(),
+        recordings_dir=config.RECORDINGS_DIR,
+        snapshots_dir=config.SNAPSHOTS_DIR,
+        uploads_dir=config.UPLOAD_FOLDER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# JSON API for dashboard widgets
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/api/status")
+@login_required
+def api_status():
+    db = get_db()
+    from camera import get_camera_status
+    from recorder import get_recorder
+
+    cam  = get_camera_status()
+    rec  = get_recorder().get_state()
+    unkn = models.count_events_today(db, "unknown")
+    recg = models.count_events_today(db, "recognized")
+
+    return jsonify({
+        "camera_running":      cam.get("running", False),
+        "camera_error":        cam.get("error", ""),
+        "camera_source":       cam.get("source", "webcam"),
+        "night_vision":        cam.get("night_vision", False),
+        "is_recording":        rec.is_recording,
+        "recording_duration":  rec.duration_seconds,
+        "unknown_today":       unkn,
+        "recognized_today":    recg,
+        "enrolled_count":      len(models.get_all_enrolled(db)),
+        "disk_pct":            disk_usage_percent("/"),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Serve uploaded face images
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/faces/<path:filename>")
+@operator_required
+def serve_face(filename: str):
+    safe = Path(filename).name
+    return send_from_directory(config.UPLOAD_FOLDER, safe)

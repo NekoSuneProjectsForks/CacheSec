@@ -1,0 +1,55 @@
+{% extends "admin/layout.html" %}
+{% block title %}Audit Log{% endblock %}
+{% block page_title %}<i class="bi bi-journal-text me-2"></i>Audit Log{% endblock %}
+
+{% block content %}
+<div class="card cs-card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-dark table-hover table-sm mb-0">
+        <thead class="table-secondary">
+          <tr>
+            <th>#</th>
+            <th>Time</th>
+            <th>User</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Detail</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in entries %}
+          <tr>
+            <td><small class="text-muted">{{ entry.id }}</small></td>
+            <td><small>{{ entry.occurred_at }}</small></td>
+            <td>{{ entry.username or '—' }}</td>
+            <td>
+              {% set action = entry.action %}
+              {% if 'DELETE' in action or 'FAIL' in action or 'LOCK' in action %}
+                <span class="badge bg-danger">{{ action }}</span>
+              {% elif 'CREATE' in action or 'ADD' in action or 'SUCCESS' in action %}
+                <span class="badge bg-success">{{ action }}</span>
+              {% elif 'UPDATE' in action or 'CHANGE' in action or 'EDIT' in action %}
+                <span class="badge bg-warning text-dark">{{ action }}</span>
+              {% else %}
+                <span class="badge bg-secondary">{{ action }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if entry.target_type %}
+                <small class="text-muted">{{ entry.target_type }}#{{ entry.target_id }}</small>
+              {% else %}—{% endif %}
+            </td>
+            <td><small class="text-muted">{{ entry.detail or '' }}</small></td>
+            <td><small class="text-muted font-monospace">{{ entry.ip_address or '—' }}</small></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="text-center text-muted py-4">No audit entries yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,298 @@
+{% extends "admin/layout.html" %}
+{% block title %}{{ person.name }}{% endblock %}
+{% block page_title %}<i class="bi bi-person-badge-fill me-2"></i>{{ person.name }}{% endblock %}
+
+{% block content %}
+
+<div class="d-flex gap-2 mb-3">
+  <a href="{{ url_for('admin.enrolled') }}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i>Back
+  </a>
+  {% if session.get('role') == 'admin' %}
+  <a href="{{ url_for('admin.enrolled_edit', person_id=person.id) }}"
+     class="btn btn-sm btn-outline-warning">
+    <i class="bi bi-pencil me-1"></i>Edit
+  </a>
+  <form method="POST" action="{{ url_for('admin.enrolled_retrain', person_id=person.id) }}" class="d-inline">
+    <button class="btn btn-sm btn-outline-info">
+      <i class="bi bi-arrow-repeat me-1"></i>Retrain Embeddings
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="row g-3">
+
+  <!-- Info card -->
+  <div class="col-md-4">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header">Person Info</div>
+      <div class="card-body">
+        <p><strong>Name:</strong> {{ person.name }}</p>
+        <p><strong>Status:</strong>
+          {% if person.is_active %}
+            <span class="badge bg-success">Active</span>
+          {% else %}
+            <span class="badge bg-secondary">Inactive</span>
+          {% endif %}
+        </p>
+        <p><strong>Notes:</strong> {{ person.notes or '—' }}</p>
+        <p><strong>Created:</strong> {{ person.created_at }}</p>
+        <p class="mb-0"><strong>Images:</strong> <span id="image-count">{{ images|length }}</span></p>
+      </div>
+    </div>
+  </div>
+
+  {% if session.get('role') == 'admin' %}
+  <!-- Capture from camera card -->
+  <div class="col-md-8">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-camera-fill me-2"></i>Capture from Camera</span>
+        <span class="badge bg-secondary" id="capture-cam-status">Loading…</span>
+      </div>
+      <div class="card-body">
+        <!-- Live preview -->
+        <div class="position-relative mb-2 bg-black text-center rounded overflow-hidden"
+             style="max-height:320px;">
+          <img id="capture-preview"
+               src="{{ url_for('admin.enrolled_capture_preview', person_id=person.id) }}"
+               class="img-fluid rounded" style="max-height:320px; object-fit:contain;"
+               alt="Camera preview">
+          <!-- Face overlay canvas -->
+          <canvas id="capture-canvas"
+                  class="position-absolute top-0 start-0 w-100 h-100"
+                  style="pointer-events:none;"></canvas>
+        </div>
+
+        <!-- Status message -->
+        <div id="capture-msg" class="small mb-2 text-muted">
+          Position your face clearly in frame, then click Capture.
+        </div>
+
+        <!-- Action buttons -->
+        <div class="d-flex gap-2 align-items-center">
+          <button id="btn-capture" class="btn btn-danger">
+            <i class="bi bi-camera me-1"></i>Capture &amp; Enroll
+          </button>
+          <button id="btn-preview-toggle" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-pause-fill me-1"></i>Pause preview
+          </button>
+          <small class="text-muted ms-2">
+            Face must be clearly visible · Only one person in frame
+          </small>
+        </div>
+
+        <!-- Last capture result -->
+        <div id="capture-result" class="mt-3 d-none">
+          <div class="d-flex align-items-center gap-3">
+            <img id="capture-thumb" src="" alt="Captured"
+                 class="rounded border border-success"
+                 style="width:80px;height:80px;object-fit:cover;">
+            <div>
+              <div class="text-success fw-semibold">
+                <i class="bi bi-check-circle-fill me-1"></i>Enrolled successfully
+              </div>
+              <small class="text-muted" id="capture-detail"></small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload from file card -->
+  <div class="col-12">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header">Upload Face Images from File</div>
+      <div class="card-body">
+        <form method="POST"
+              action="{{ url_for('admin.enrolled_upload', person_id=person.id) }}"
+              enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label small text-muted">
+              Select one or more face images (JPG/PNG, max 5 MB each).
+            </label>
+            <input type="file" name="images" class="form-control bg-secondary border-secondary text-light"
+                   multiple accept="image/jpeg,image/png,image/webp" required>
+          </div>
+          <button type="submit" class="btn btn-outline-danger">
+            <i class="bi bi-upload me-1"></i>Upload &amp; Enroll
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div><!-- /row -->
+
+<!-- Image thumbnails -->
+<div class="card cs-card mt-3" id="images-card">
+  <div class="card-header cs-card-header">
+    Enrolled Images (<span id="thumb-count">{{ images|length }}</span>)
+  </div>
+  <div class="card-body">
+    <div class="row g-2" id="thumb-grid">
+      {% for img in images %}
+      <div class="col-6 col-sm-4 col-md-3 col-lg-2" id="thumb-{{ img.id }}">
+        <div class="cs-thumb-card">
+          <img src="{{ url_for('admin.serve_face', filename=img.filename) }}"
+               class="img-fluid rounded" alt="Face image"
+               style="object-fit:cover;height:120px;width:100%;">
+          <div class="cs-thumb-overlay small text-muted">{{ img.uploaded_at[:10] }}</div>
+          {% if session.get('role') == 'admin' %}
+          <form method="POST"
+                action="{{ url_for('admin.enrolled_image_delete', person_id=person.id, image_id=img.id) }}"
+                onsubmit="return confirm('Delete this image?')"
+                class="mt-1">
+            <button class="btn btn-xs btn-outline-danger w-100 py-0">
+              <i class="bi bi-trash"></i> Delete
+            </button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% if not images %}
+    <p class="text-muted" id="no-images-msg">No images enrolled yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const personId      = {{ person.id }};
+  const previewImg    = document.getElementById('capture-preview');
+  const captureMsg    = document.getElementById('capture-msg');
+  const btnCapture    = document.getElementById('btn-capture');
+  const btnToggle     = document.getElementById('btn-preview-toggle');
+  const resultBox     = document.getElementById('capture-result');
+  const resultThumb   = document.getElementById('capture-thumb');
+  const resultDetail  = document.getElementById('capture-detail');
+  const camStatus     = document.getElementById('capture-cam-status');
+  const thumbGrid     = document.getElementById('thumb-grid');
+  const thumbCount    = document.getElementById('thumb-count');
+  const imageCount    = document.getElementById('image-count');
+  const noImagesMsg   = document.getElementById('no-images-msg');
+
+  if (!previewImg) return;  // not admin
+
+  let previewing = true;
+  let previewTimer = null;
+
+  // -----------------------------------------------------------------------
+  // Rolling preview — reload the still frame every 200 ms
+  // -----------------------------------------------------------------------
+  function refreshPreview() {
+    if (!previewing) return;
+    // Append a cache-buster so the browser fetches a fresh frame each time
+    previewImg.src =
+      '/admin/enrolled/' + personId + '/capture_preview?t=' + Date.now();
+  }
+
+  function startPreview() {
+    previewing = true;
+    btnToggle.innerHTML = '<i class="bi bi-pause-fill me-1"></i>Pause preview';
+    previewTimer = setInterval(refreshPreview, 200);
+  }
+
+  function stopPreview() {
+    previewing = false;
+    clearInterval(previewTimer);
+    btnToggle.innerHTML = '<i class="bi bi-play-fill me-1"></i>Resume preview';
+  }
+
+  previewImg.addEventListener('load', function () {
+    camStatus.textContent = 'Live';
+    camStatus.className   = 'badge bg-success';
+  });
+
+  previewImg.addEventListener('error', function () {
+    camStatus.textContent = 'Camera offline';
+    camStatus.className   = 'badge bg-danger';
+  });
+
+  btnToggle.addEventListener('click', function () {
+    if (previewing) stopPreview(); else startPreview();
+  });
+
+  startPreview();
+
+  // -----------------------------------------------------------------------
+  // Capture button
+  // -----------------------------------------------------------------------
+  btnCapture.addEventListener('click', function () {
+    stopPreview();
+    btnCapture.disabled = true;
+    btnCapture.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Capturing…';
+    captureMsg.className = 'small mb-2 text-muted';
+    captureMsg.textContent = 'Sending capture request…';
+    resultBox.classList.add('d-none');
+
+    fetch('/admin/enrolled/' + personId + '/capture', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    })
+    .then(function (r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function (res) {
+      if (res.ok && res.data.ok) {
+        // Success
+        captureMsg.className  = 'small mb-2 text-success';
+        captureMsg.textContent = '✓ Face captured and enrolled.';
+
+        resultThumb.src     = res.data.image_url + '?t=' + Date.now();
+        resultDetail.textContent =
+          'File: ' + res.data.filename +
+          ' · Detection confidence: ' + res.data.det_score;
+        resultBox.classList.remove('d-none');
+
+        // Add thumbnail to grid without page reload
+        addThumb(res.data.filename, res.data.image_url, personId);
+
+      } else {
+        captureMsg.className  = 'small mb-2 text-danger';
+        captureMsg.textContent = '✗ ' + (res.data.error || 'Capture failed.');
+      }
+    })
+    .catch(function (err) {
+      captureMsg.className  = 'small mb-2 text-danger';
+      captureMsg.textContent = '✗ Network error: ' + err;
+    })
+    .finally(function () {
+      btnCapture.disabled = false;
+      btnCapture.innerHTML = '<i class="bi bi-camera me-1"></i>Capture &amp; Enroll';
+      startPreview();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Dynamically add thumbnail after successful capture
+  // -----------------------------------------------------------------------
+  function addThumb(filename, imageUrl, pid) {
+    if (noImagesMsg) noImagesMsg.remove();
+
+    const col = document.createElement('div');
+    col.className = 'col-6 col-sm-4 col-md-3 col-lg-2';
+    col.innerHTML =
+      '<div class="cs-thumb-card">' +
+        '<img src="' + imageUrl + '?t=' + Date.now() + '" ' +
+             'class="img-fluid rounded" ' +
+             'style="object-fit:cover;height:120px;width:100%;" alt="Face image">' +
+        '<div class="cs-thumb-overlay small text-muted">just now</div>' +
+      '</div>';
+    thumbGrid.appendChild(col);
+
+    // Update counts
+    const n = thumbGrid.querySelectorAll('.cs-thumb-card').length;
+    thumbCount.textContent = n;
+    if (imageCount) imageCount.textContent = n;
+  }
+
+})();
+</script>
+{% endblock %}

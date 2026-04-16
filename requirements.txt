@@ -1,0 +1,56 @@
+# =============================================================================
+# CacheSec — Python dependencies
+# =============================================================================
+# Install into a virtual environment:
+#   python3 -m venv venv
+#   source venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Notes for Raspberry Pi 5 (ARM64 / aarch64):
+#   - onnxruntime: pre-built wheels are available for aarch64 on PyPI.
+#     If pip can't find it, use the community build:
+#     pip install onnxruntime  (should work on Pi 5 with Python 3.11+)
+#   - insightface: installs via pip, downloads model weights on first run
+#     (~300 MB for buffalo_l). Ensure you have internet on first boot.
+#   - gpiozero: ships with Raspberry Pi OS; include here for venv installs.
+#   - opencv-python-headless: no GUI dependencies, smaller footprint.
+# =============================================================================
+
+# ---- Web framework ----
+Flask==3.1.3
+gunicorn==25.3.0
+
+# ---- Authentication / security ----
+bcrypt>=4.0.0
+
+# ---- Database ----
+# sqlite3 is part of the Python stdlib; no extra package needed.
+
+# ---- Environment / config ----
+python-dotenv==1.0.1
+
+# ---- Face recognition ----
+# Direct ONNX Runtime pipeline — no insightface or onnx package needed.
+# Models (SCRFD detector + MobileFaceNet ArcFace embedder) are downloaded
+# automatically on first run to ~/.cachesec/models/ (~30 MB total).
+# insightface is NOT used: it depends on the `onnx` package which is broken
+# on Python 3.13 (ml_dtypes.float4_e2m1fn AttributeError).
+# insightface 0.7.3 also requires numpy<2; this stack has no such constraint.
+onnxruntime==1.20.1    # Use onnxruntime-gpu if you add a GPU HAT
+numpy>=1.24.0
+
+# ---- Computer vision ----
+opencv-python-headless>=4.10.0
+
+# ---- GPIO / sound ----
+gpiozero==2.0.1
+# RPi.GPIO is the gpiozero backend on Pi OS; usually pre-installed.
+# Uncomment if you need it explicitly in the venv:
+# RPi.GPIO==0.7.1
+
+# ---- Notifications ----
+requests==2.32.3
+
+# ---- Proxy / Cloudflare ----
+# Werkzeug ProxyFix is included with Flask; no separate install needed.
+Werkzeug==3.1.8

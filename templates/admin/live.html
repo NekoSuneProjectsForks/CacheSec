@@ -1,0 +1,56 @@
+{% extends "admin/layout.html" %}
+{% block title %}Live Feed{% endblock %}
+{% block page_title %}<i class="bi bi-camera-video-fill me-2"></i>Live Camera Feed{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-10">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header d-flex justify-content-between align-items-center">
+        <span>Live Feed</span>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="badge bg-secondary d-none" id="nv-badge">
+            <i class="bi bi-moon-stars-fill me-1"></i>Night Vision
+          </span>
+          <span class="badge bg-success blink-dot"><i class="bi bi-circle-fill me-1"></i>LIVE</span>
+        </div>
+      </div>
+      <div class="card-body p-0 text-center bg-black">
+        <img src="{{ url_for('admin.live_stream') }}"
+             class="img-fluid" style="max-height:70vh;" alt="Live camera feed"
+             onerror="this.src='{{ url_for('static', filename='img/no-feed.svg') }}'; this.onerror=null;">
+      </div>
+      <div class="card-footer text-muted small">
+        Frame is MJPEG stream from the detection process. Annotations show bounding boxes and recognition results.
+        Night-vision filter activates automatically when the scene is dark.
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const nvBadge = document.getElementById('nv-badge');
+
+  function pollStatus() {
+    fetch('/admin/api/status')
+      .then(r => r.json())
+      .then(d => {
+        if (d.night_vision) {
+          nvBadge.classList.remove('d-none');
+          nvBadge.classList.remove('bg-secondary');
+          nvBadge.classList.add('bg-success');
+        } else {
+          nvBadge.classList.add('d-none');
+        }
+      })
+      .catch(() => {});
+  }
+
+  pollStatus();
+  setInterval(pollStatus, 3000);
+})();
+</script>
+{% endblock %}

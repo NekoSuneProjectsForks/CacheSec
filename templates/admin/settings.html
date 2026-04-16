@@ -1,0 +1,116 @@
+{% extends "admin/layout.html" %}
+{% block title %}Settings{% endblock %}
+{% block page_title %}<i class="bi bi-gear-fill me-2"></i>System Settings{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header">Detection &amp; Recognition</div>
+      <form method="POST">
+        <div class="card-body row g-3">
+
+          <div class="col-md-6">
+            <label class="form-label">Recognition Threshold
+              <i class="bi bi-info-circle text-muted" data-bs-toggle="tooltip"
+                 title="Cosine similarity score required to match a face (0–1). Lower = stricter. Default 0.4."></i>
+            </label>
+            <input type="number" step="0.01" min="0.1" max="0.9" name="recognition_threshold"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.recognition_threshold or '0.4' }}">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Frame Skip
+              <i class="bi bi-info-circle text-muted" data-bs-toggle="tooltip"
+                 title="Run detection every N frames. Higher = less CPU. Default 3."></i>
+            </label>
+            <input type="number" step="1" min="1" max="30" name="frame_skip"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.frame_skip or '3' }}">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Unknown Cooldown (seconds)</label>
+            <input type="number" step="1" min="1" max="120" name="unknown_cooldown_seconds"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.unknown_cooldown_seconds or '10' }}">
+          </div>
+
+        </div>
+
+        <div class="card-header cs-card-header border-top border-secondary">Recording</div>
+        <div class="card-body row g-3">
+
+          <div class="col-md-6">
+            <label class="form-label">Min Recording Duration (seconds)</label>
+            <input type="number" step="1" min="5" max="300" name="min_recording_seconds"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.min_recording_seconds or '15' }}">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Max Recording Duration (seconds)</label>
+            <input type="number" step="60" min="60" max="10800" name="max_recording_seconds"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.max_recording_seconds or '5400' }}">
+          </div>
+
+        </div>
+
+        <div class="card-header cs-card-header border-top border-secondary">Discord Webhook</div>
+        <div class="card-body row g-3">
+
+          <div class="col-12">
+            <label class="form-label">Webhook URL</label>
+            <input type="url" name="discord_webhook_url"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="https://discord.com/api/webhooks/..."
+                   value="{{ settings.discord_webhook_url or '' }}">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Discord Cooldown (seconds)</label>
+            <input type="number" step="1" min="10" max="3600" name="discord_cooldown_seconds"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.discord_cooldown_seconds or '60' }}">
+          </div>
+
+        </div>
+
+        <div class="card-header cs-card-header border-top border-secondary">Sound</div>
+        <div class="card-body row g-3">
+
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="sound_enabled"
+                     name="sound_enabled" value="true"
+                     {{ 'checked' if settings.sound_enabled == 'true' else '' }}>
+              <label class="form-check-label" for="sound_enabled">
+                Enable GPIO Buzzer Sounds
+              </label>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="card-footer d-flex gap-2">
+          <button type="submit" class="btn btn-danger">
+            <i class="bi bi-save me-1"></i>Save Settings
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Enable Bootstrap tooltips
+document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+  new bootstrap.Tooltip(el);
+});
+</script>
+{% endblock %}

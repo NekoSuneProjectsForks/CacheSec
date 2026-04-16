@@ -1,0 +1,382 @@
+/* ============================================================
+   CacheSec Dashboard — Custom CSS
+   Dark theme built on top of Bootstrap 5 dark mode.
+   ============================================================ */
+
+:root {
+  --cs-bg:          #0d0f14;
+  --cs-sidebar-bg:  #111318;
+  --cs-topbar-bg:   #13151b;
+  --cs-card-bg:     #1a1d24;
+  --cs-card-border: #2a2d36;
+  --cs-accent:      #e63946;
+  --cs-accent-dim:  rgba(230, 57, 70, 0.15);
+  --cs-text:        #dde1f0;
+  --cs-muted:       #6b7280;
+  --cs-sidebar-w:   240px;
+}
+
+/* ---- Base ---- */
+body {
+  background-color: var(--cs-bg);
+  color: var(--cs-text);
+  font-size: 0.9rem;
+}
+
+/* ---- Layout ---- */
+#wrapper {
+  min-height: 100vh;
+}
+
+#sidebar {
+  width: var(--cs-sidebar-w);
+  min-height: 100vh;
+  background-color: var(--cs-sidebar-bg);
+  transition: width 0.25s ease;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+#sidebar.collapsed {
+  width: 0;
+}
+
+#main-content {
+  min-width: 0;
+  background-color: var(--cs-bg);
+}
+
+.bg-cs-sidebar { background-color: var(--cs-sidebar-bg) !important; }
+.bg-cs-topbar  { background-color: var(--cs-topbar-bg) !important; }
+.bg-cs-card    { background-color: var(--cs-card-bg) !important; }
+
+/* ---- Topbar ---- */
+.topbar {
+  height: 52px;
+  background-color: var(--cs-topbar-bg);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbar-title {
+  font-weight: 600;
+  color: var(--cs-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* ---- Sidebar links ---- */
+#sidebar .nav-link {
+  color: #9ca3af;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+  font-size: 0.87rem;
+  white-space: nowrap;
+}
+
+#sidebar .nav-link:hover,
+#sidebar .nav-link.active {
+  background-color: var(--cs-accent-dim);
+  color: #fff;
+}
+
+#sidebar .nav-link.active {
+  color: var(--cs-accent);
+  font-weight: 600;
+}
+
+.sidebar-section-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--cs-muted);
+  padding: 0.75rem 0.75rem 0.2rem;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.sidebar-brand {
+  min-height: 60px;
+  white-space: nowrap;
+}
+
+.sidebar-footer {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* ---- Sidebar mobile overlay backdrop ---- */
+#sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 1039;
+}
+
+#sidebar-backdrop.visible {
+  display: block;
+}
+
+/* ---- Cards ---- */
+.cs-card {
+  background-color: var(--cs-card-bg);
+  border: 1px solid var(--cs-card-border);
+  border-radius: 10px;
+}
+
+.cs-card-header {
+  background-color: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--cs-card-border);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #c9d0e0;
+  padding: 0.6rem 1rem;
+}
+
+/* ---- Stat cards ---- */
+.cs-stat-card {
+  background-color: var(--cs-card-bg);
+  border: 1px solid var(--cs-card-border);
+  border-radius: 10px;
+}
+
+.cs-stat-card .card-body {
+  padding: 0.85rem;
+}
+
+.stat-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--cs-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--cs-text);
+}
+
+/* ---- Tables ---- */
+.table-dark {
+  --bs-table-bg: var(--cs-card-bg);
+  --bs-table-striped-bg: rgba(255,255,255,0.025);
+  --bs-table-hover-bg: rgba(255,255,255,0.04);
+  --bs-table-border-color: var(--cs-card-border);
+  font-size: 0.85rem;
+}
+
+.table-secondary {
+  --bs-table-bg: rgba(255,255,255,0.04);
+  --bs-table-color: #9ca3af;
+}
+
+/* ---- Forms ---- */
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--cs-accent);
+  box-shadow: 0 0 0 0.2rem var(--cs-accent-dim);
+}
+
+.form-control.bg-secondary,
+.form-select.bg-secondary {
+  background-color: #1e2029 !important;
+  border-color: var(--cs-card-border) !important;
+  color: var(--cs-text) !important;
+}
+
+.form-control.bg-secondary::placeholder {
+  color: var(--cs-muted);
+}
+
+/* ---- Buttons ---- */
+.btn-danger {
+  background-color: var(--cs-accent);
+  border-color: var(--cs-accent);
+}
+
+.btn-danger:hover {
+  background-color: #c0323e;
+  border-color: #c0323e;
+}
+
+/* Larger touch targets on mobile */
+@media (max-width: 576px) {
+  .btn {
+    min-height: 38px;
+  }
+  .btn-sm {
+    min-height: 32px;
+  }
+}
+
+/* ---- Badges ---- */
+.badge {
+  font-weight: 500;
+  font-size: 0.72rem;
+}
+
+/* ---- Blinking dot for REC/LIVE ---- */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+.blink-dot {
+  animation: blink 1.4s ease-in-out infinite;
+}
+
+/* ---- Enrolled face thumbnails ---- */
+.cs-thumb-card {
+  position: relative;
+}
+
+.cs-thumb-overlay {
+  position: absolute;
+  bottom: 2rem;
+  left: 0;
+  right: 0;
+  background: rgba(0,0,0,0.55);
+  text-align: center;
+  padding: 2px 0;
+}
+
+/* ---- Login page card ---- */
+.bg-cs-card {
+  background-color: var(--cs-card-bg) !important;
+}
+
+/* ---- Scrollbar (webkit) ---- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--cs-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3a3d4a;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* ---- Alert overrides ---- */
+.alert {
+  font-size: 0.86rem;
+}
+
+/* ---- Code / mono ---- */
+code {
+  color: #e0a080;
+  background: rgba(255,255,255,0.05);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.83em;
+}
+
+/* ---- Progress bar ---- */
+.progress {
+  background-color: var(--cs-card-border);
+}
+
+/* ===========================================================
+   MOBILE RESPONSIVE (≤768px)
+   =========================================================== */
+
+@media (max-width: 768px) {
+
+  /* Sidebar slides over content as a drawer */
+  #sidebar {
+    position: fixed;
+    z-index: 1040;
+    height: 100vh;
+    top: 0;
+    left: 0;
+    width: var(--cs-sidebar-w);
+    transition: transform 0.25s ease;
+    transform: translateX(0);
+    overflow-y: auto;
+  }
+
+  #sidebar.mobile-hidden {
+    transform: translateX(-100%);
+    width: var(--cs-sidebar-w); /* keep width so transition works */
+  }
+
+  /* Main content always full width on mobile */
+  #main-content {
+    width: 100%;
+  }
+
+  /* Topbar: tighter on small screens */
+  .topbar {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+
+  /* Hide rec badge on very small screens — shows in status bar */
+  #rec-badge {
+    display: none !important;
+  }
+
+  /* Smaller stat values */
+  .stat-value {
+    font-size: 1.4rem;
+  }
+
+  /* Tables: hide low-priority columns */
+  .table .col-hide-mobile {
+    display: none;
+  }
+
+  /* Tighter card padding */
+  .cs-card-header {
+    padding: 0.5rem 0.75rem;
+  }
+
+  /* Full-width buttons in forms */
+  .mobile-full-btn {
+    width: 100% !important;
+  }
+
+  /* Reduce page padding */
+  main.flex-grow-1 {
+    padding: 0.75rem !important;
+  }
+}
+
+/* Extra small (≤480px) */
+@media (max-width: 480px) {
+  .stat-value {
+    font-size: 1.2rem;
+  }
+  .topbar-title {
+    font-size: 0.85rem;
+  }
+  #cam-badge {
+    font-size: 0.65rem;
+  }
+}

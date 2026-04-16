@@ -1,0 +1,205 @@
+{% extends "admin/layout.html" %}
+{% block title %}Overview{% endblock %}
+{% block page_title %}<i class="bi bi-speedometer2 me-2"></i>Overview{% endblock %}
+
+{% block content %}
+
+<!-- Stat cards row -->
+<div class="row g-3 mb-4">
+
+  <div class="col-6 col-md-3">
+    <div class="card cs-stat-card border-0">
+      <div class="card-body">
+        <div class="stat-icon bg-danger bg-opacity-10 text-danger">
+          <i class="bi bi-exclamation-triangle-fill"></i>
+        </div>
+        <div class="stat-label">Unknown Today</div>
+        <div class="stat-value" id="stat-unknown">{{ unknown_today }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-3">
+    <div class="card cs-stat-card border-0">
+      <div class="card-body">
+        <div class="stat-icon bg-success bg-opacity-10 text-success">
+          <i class="bi bi-person-check-fill"></i>
+        </div>
+        <div class="stat-label">Recognized Today</div>
+        <div class="stat-value" id="stat-recognized">{{ recognized_today }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-3">
+    <div class="card cs-stat-card border-0">
+      <div class="card-body">
+        <div class="stat-icon bg-primary bg-opacity-10 text-primary">
+          <i class="bi bi-person-badge-fill"></i>
+        </div>
+        <div class="stat-label">Enrolled People</div>
+        <div class="stat-value">{{ enrolled_count }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-3">
+    <div class="card cs-stat-card border-0">
+      <div class="card-body">
+        <div class="stat-icon bg-warning bg-opacity-10 text-warning">
+          <i class="bi bi-film"></i>
+        </div>
+        <div class="stat-label">Recordings</div>
+        <div class="stat-value">{{ recording_count }}</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /row -->
+
+<!-- Status row -->
+<div class="row g-3 mb-4">
+
+  <!-- Camera status -->
+  <div class="col-md-4">
+    <div class="card cs-card h-100">
+      <div class="card-header cs-card-header">
+        <i class="bi bi-camera-video-fill me-2"></i>Camera
+      </div>
+      <div class="card-body d-flex align-items-center gap-3 flex-wrap">
+        {% if cam_status.running %}
+          <span class="badge bg-success fs-6"><i class="bi bi-circle-fill me-1"></i>Online</span>
+        {% else %}
+          <span class="badge bg-danger fs-6"><i class="bi bi-circle-fill me-1"></i>Offline</span>
+        {% endif %}
+        {% if cam_status.source == 'kinect' %}
+          <span class="badge bg-info"><i class="bi bi-gpu-card me-1"></i>Kinect</span>
+        {% else %}
+          <span class="badge bg-secondary"><i class="bi bi-webcam me-1"></i>Webcam</span>
+        {% endif %}
+        {% if cam_status.night_vision %}
+          <span class="badge bg-success"><i class="bi bi-moon-stars-fill me-1"></i>Night Vision</span>
+        {% endif %}
+        <span class="text-muted small">{{ cam_status.error or 'No errors' }}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recording status -->
+  <div class="col-md-4">
+    <div class="card cs-card h-100">
+      <div class="card-header cs-card-header">
+        <i class="bi bi-record-circle-fill me-2"></i>Recording
+      </div>
+      <div class="card-body d-flex align-items-center gap-3">
+        {% if rec_state.is_recording %}
+          <span class="badge bg-danger fs-6 blink-dot"><i class="bi bi-record-circle me-1"></i>REC</span>
+          <span class="text-muted small">{{ rec_state.duration_seconds }}s &mdash; {{ rec_state.filename }}</span>
+        {% else %}
+          <span class="badge bg-secondary fs-6">Idle</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Storage -->
+  <div class="col-md-4">
+    <div class="card cs-card h-100">
+      <div class="card-header cs-card-header">
+        <i class="bi bi-hdd-fill me-2"></i>Storage
+      </div>
+      <div class="card-body">
+        <div class="d-flex justify-content-between mb-1">
+          <small>Media files: {{ storage_mb }} MB</small>
+          <small>Disk: {{ disk_pct }}%</small>
+        </div>
+        <div class="progress" style="height:6px;">
+          <div class="progress-bar {% if disk_pct > 85 %}bg-danger{% elif disk_pct > 65 %}bg-warning{% else %}bg-success{% endif %}"
+               style="width:{{ disk_pct }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /status row -->
+
+<!-- Recent events table -->
+<div class="card cs-card">
+  <div class="card-header cs-card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-activity me-2"></i>Recent Events</span>
+    <a href="{{ url_for('admin.events') }}" class="btn btn-sm btn-outline-secondary">View all</a>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-dark table-hover table-sm mb-0">
+        <thead class="table-secondary">
+          <tr>
+            <th class="col-hide-mobile">ID</th>
+            <th>Type</th>
+            <th class="col-hide-mobile">Person</th>
+            <th class="col-hide-mobile">Confidence</th>
+            <th>Time</th>
+            <th>Rec</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ev in recent_events %}
+          <tr>
+            <td class="col-hide-mobile"><small class="text-muted">{{ ev.id }}</small></td>
+            <td>
+              {% if ev.event_type == 'unknown' %}
+                <span class="badge bg-danger">Unknown</span>
+              {% else %}
+                <span class="badge bg-success">Recognized</span>
+              {% endif %}
+            </td>
+            <td class="col-hide-mobile">{{ ev.person_name or '—' }}</td>
+            <td class="col-hide-mobile">{{ '%.2f'|format(ev.confidence) if ev.confidence else '—' }}</td>
+            <td><small>{{ ev.occurred_at }}</small></td>
+            <td>
+              {% if ev.recording_path %}
+                <i class="bi bi-check-circle-fill text-success"></i>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="text-center text-muted py-3">No events yet</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-refresh status widgets every 10 seconds
+setInterval(function() {
+  fetch('{{ url_for("admin.api_status") }}')
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('stat-unknown').textContent    = d.unknown_today;
+      document.getElementById('stat-recognized').textContent = d.recognized_today;
+      // Topbar badges
+      const cb = document.getElementById('cam-badge');
+      const cl = document.getElementById('cam-label');
+      if (d.camera_running) {
+        cb.className = 'badge bg-success'; cl.textContent = 'Camera Live';
+      } else {
+        cb.className = 'badge bg-danger'; cl.textContent = 'Camera Offline';
+      }
+      const rl = document.getElementById('rec-label');
+      const rb = document.getElementById('rec-badge');
+      if (d.is_recording) {
+        rb.className = 'badge bg-danger'; rl.textContent = 'REC ' + d.recording_duration + 's';
+      } else {
+        rb.className = 'badge bg-secondary'; rl.textContent = 'Idle';
+      }
+    }).catch(() => {});
+}, 10000);
+</script>
+{% endblock %}

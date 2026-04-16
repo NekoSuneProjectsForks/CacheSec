@@ -1,0 +1,56 @@
+[Unit]
+Description=CacheSec Face Recognition Security System
+Documentation=https://github.com/yourname/cachesec
+After=network.target network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=cache
+Group=cache
+WorkingDirectory=/home/cache/cachesec
+
+# Load secrets from .env file (never hardcode them here)
+EnvironmentFile=/home/cache/cachesec/.env
+
+# Use the virtual environment's Gunicorn
+# Single worker is required: one process owns the camera & background threads
+ExecStart=/home/cache/cachesec/venv/bin/gunicorn \
+    --workers 1 \
+    --threads 4 \
+    --bind 127.0.0.1:5000 \
+    --timeout 120 \
+    --keep-alive 5 \
+    --log-level warning \
+    --access-logfile /home/cache/cachesec/logs/access.log \
+    --error-logfile /home/cache/cachesec/logs/gunicorn.log \
+    app:app
+
+# Graceful restart
+ExecReload=/bin/kill -s HUP $MAINPID
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/cache/cachesec
+
+# Give GPIO access (needed for buzzer — requires 'gpio' group membership)
+SupplementaryGroups=gpio video
+
+# Process limits
+LimitNOFILE=65536
+
+# Standard streams
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cachesec
+
+[Install]
+WantedBy=multi-user.target
