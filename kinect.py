@@ -406,11 +406,18 @@ class KinectSource:
                 if switch_flag:
                     self._pending_mode_switch = False
 
-            # On mode change, flush 3 frames to drain old stream
+            # On mode change, flush frames to drain old stream and let the
+            # IR projector spin up. The Kinect IR structured-light projector
+            # activates as soon as the IR sync context starts grabbing, but
+            # needs ~10 frames (~330ms at 30fps) to stabilise.
             if desired_mode != current_mode or switch_flag:
-                flush_needed  = 3
-                current_mode  = desired_mode
-                logger.info("Kinect stream: switching to %s (flushing)", current_mode)
+                flush_needed = 10 if desired_mode == "ir" else 5
+                current_mode = desired_mode
+                logger.info("Kinect stream: switching to %s (flushing %d frames)",
+                            current_mode, flush_needed)
+                # Brief pause so the old sync context fully releases before
+                # the new one starts — prevents the IR projector being blocked
+                time.sleep(0.15)
                 # Update LED to reflect mode
                 if self._motor_dev is not None:
                     led = KinectLED.BLINK_GREEN if current_mode == "ir" else KinectLED.GREEN

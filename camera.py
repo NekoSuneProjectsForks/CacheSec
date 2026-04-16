@@ -257,11 +257,25 @@ class CameraLoop:
         if use_kinect:
             if kinect.start():
                 _camera_status["source"] = "kinect"
-                kinect.set_led(KinectLED.GREEN)
                 if config.KINECT_TILT != 0:
                     kinect.set_tilt(config.KINECT_TILT)
                 logger.info("Using Kinect as camera source")
                 cap = None
+
+                # Check brightness of first frame — if already dark, start in IR
+                first = kinect.read_frame()
+                if first is not None:
+                    gray_mean = float(np.mean(cv2.cvtColor(first, cv2.COLOR_BGR2GRAY)))
+                    if gray_mean < NIGHT_VISION_THRESHOLD:
+                        logger.info("Room already dark (%.1f) — starting Kinect in IR mode", gray_mean)
+                        _night_vision_active = True
+                        _camera_status["night_vision"] = True
+                        kinect.set_mode("ir")
+                        kinect.set_led(KinectLED.BLINK_GREEN)
+                    else:
+                        kinect.set_led(KinectLED.GREEN)
+                else:
+                    kinect.set_led(KinectLED.GREEN)
             else:
                 logger.warning("Kinect detected but failed to start: %s — falling back to webcam",
                                kinect.error)
