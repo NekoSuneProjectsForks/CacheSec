@@ -340,6 +340,15 @@ class CameraLoop:
                     # kinect.read_frame() returns plain BGR in RGB mode and
                     # CLAHE-enhanced grayscale-as-BGR in IR mode — no further processing
                     display_frame = frame
+
+                    # SLS skeleton overlay — only in IR/night mode using depth data
+                    if _night_vision_active:
+                        depth_for_skel = kinect.read_depth()
+                        if depth_for_skel is not None:
+                            from skeleton import overlay_skeletons
+                            display_frame = overlay_skeletons(
+                                display_frame.copy(), depth_for_skel
+                            )
                 else:
                     # Webcam: software NV filter
                     gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
