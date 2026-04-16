@@ -117,13 +117,22 @@ def _send(
             file_h = open(snap, "rb")
             files  = {"file": (snap.name, file_h, "image/jpeg")}
 
-        resp = requests.post(
-            webhook_url,
-            json=payload if files is None else None,
-            data=payload if files is not None else None,
-            files=files,
-            timeout=10,
-        )
+        if files is not None:
+            # Multipart upload: Discord requires the JSON payload in a
+            # 'payload_json' field, not as raw form data keys.
+            import json as _json
+            resp = requests.post(
+                webhook_url,
+                data={"payload_json": _json.dumps(payload)},
+                files=files,
+                timeout=10,
+            )
+        else:
+            resp = requests.post(
+                webhook_url,
+                json=payload,
+                timeout=10,
+            )
         resp.raise_for_status()
         logger.info("Discord webhook sent for event %d (status %d)", event_id, resp.status_code)
         return True

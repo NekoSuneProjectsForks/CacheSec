@@ -53,6 +53,12 @@
           <i class="bi bi-film me-2"></i>Recordings
         </a>
       </li>
+      <li class="nav-item">
+        <a class="nav-link {% if request.endpoint == 'admin.heatmap_page' %}active{% endif %}"
+           href="{{ url_for('admin.heatmap_page') }}">
+          <i class="bi bi-fire me-2"></i>Heatmap
+        </a>
+      </li>
 
       <li class="sidebar-section-label">Management</li>
       <li class="nav-item">

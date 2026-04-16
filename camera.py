@@ -217,14 +217,12 @@ class CameraLoop:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # minimal latency
 
-        # Push exposure to maximum so the sensor collects as much light as
-        # possible. Most USB webcams auto-expose well in daylight but clip to
-        # a short shutter in darkness, yielding a nearly black frame.
-        # CAP_PROP_AUTO_EXPOSURE: 1 = manual, 3 = auto (driver-specific)
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)          # manual mode (1)
-        cap.set(cv2.CAP_PROP_EXPOSURE, 5000)            # max: 5000
-        cap.set(cv2.CAP_PROP_GAIN, 100)                 # max: 100
-        cap.set(cv2.CAP_PROP_BRIGHTNESS, 64)            # max: 64
+        # Start in auto-exposure (aperture priority) with neutral settings.
+        # Night vision will switch to manual max when darkness is detected.
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)   # 3 = aperture priority auto
+        cap.set(cv2.CAP_PROP_BRIGHTNESS, 0)      # neutral (default=0)
+        cap.set(cv2.CAP_PROP_CONTRAST, 32)       # default
+        cap.set(cv2.CAP_PROP_GAIN, 0)            # let auto handle it
 
         # Warm up: read and discard a few frames so the sensor settles
         for _ in range(5):
@@ -305,26 +303,32 @@ class CameraLoop:
 
                 # ---- Night-vision ----
                 if use_kinect:
-                    # Kinect: switch between RGB and IR stream based on brightness
-                    gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
-                    if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
-                        _night_vision_active = True
-                        _camera_status["night_vision"] = True
-                        kinect.set_mode("ir")
-                        kinect.set_led(KinectLED.BLINK_GREEN)
-                        logger.info("Kinect → IR mode (brightness=%.1f)", gray_mean)
-                    elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
-                        _night_vision_active = False
-                        _camera_status["night_vision"] = False
-                        kinect.set_mode("rgb")
-                        kinect.set_led(KinectLED.GREEN)
-                        logger.info("Kinect → RGB mode (brightness=%.1f)", gray_mean)
-
-                    # IR frames already look like NV — just apply green tint
-                    if _night_vision_active:
-                        display_frame = _apply_ir_tint(frame)
+                    # Skip brightness check for a few frames after a mode switch
+                    # to let the Kinect flush its old-stream buffer (3-frame flush
+                    # in kinect.py) before we evaluate brightness again.
+                    kinect_settle = getattr(self, '_kinect_settle', 0)
+                    if kinect_settle > 0:
+                        self._kinect_settle = kinect_settle - 1
                     else:
-                        display_frame = frame
+                        gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                        if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
+                            _night_vision_active = True
+                            _camera_status["night_vision"] = True
+                            kinect.set_mode("ir")
+                            kinect.set_led(KinectLED.BLINK_GREEN)
+                            self._kinect_settle = 6   # skip 6 frames after switch
+                            logger.info("Kinect → IR mode (brightness=%.1f)", gray_mean)
+                        elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
+                            _night_vision_active = False
+                            _camera_status["night_vision"] = False
+                            kinect.set_mode("rgb")
+                            kinect.set_led(KinectLED.GREEN)
+                            self._kinect_settle = 6
+                            logger.info("Kinect → RGB mode (brightness=%.1f)", gray_mean)
+
+                    # kinect.read_frame() already returns green-tinted BGR in IR mode
+                    # and normal BGR in RGB mode — no further processing needed
+                    display_frame = frame
                 else:
                     # Webcam: software NV filter
                     gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
@@ -365,16 +369,55 @@ class CameraLoop:
                 unknown_in_frame = False
                 annotated = display_frame.copy()
 
+                # Grab Kinect depth frame for spoof check (best-effort)
+                depth_raw = None
+                if use_kinect:
+                    depth_raw = kinect.read_depth()
+
+                fh, fw = frame.shape[:2]
                 for face in faces:
                     if face.embedding is None:
+                        continue
+
+                    # Record every detection in the heatmap
+                    from heatmap import record_detection
+                    record_detection(face.bbox, frame_w=fw, frame_h=fh)
+
+                    # --- Spoof check ---
+                    x1, y1, x2, y2 = face.bbox
+                    face_crop = frame[y1:y2, x1:x2]
+                    from spoof import is_live
+                    live, spoof_reason = is_live(face_crop, face.bbox, depth_raw)
+                    if not live:
+                        logger.info("Spoof detected (bbox=%s): %s", face.bbox, spoof_reason)
+                        _draw_face(annotated, face, "SPOOF", 0.0, color=(0, 165, 255))
+                        continue
+
+                    # --- Mask check ---
+                    masked, mask_reason = _check_mask(face_crop)
+                    if masked:
+                        logger.info("Mask detected (bbox=%s): %s", face.bbox, mask_reason)
+                        _draw_face(annotated, face, "MASKED", 0.0, color=(255, 165, 0))
+                        unknown_in_frame = True
                         continue
 
                     match = recognizer.match(face.embedding, threshold=threshold)
 
                     if match:
-                        _draw_face(annotated, face, match.person_name,
-                                   match.score, color=(0, 255, 0))
-                        _log_recognized(face, match)
+                        # Check access schedule — treat out-of-hours as unknown
+                        from database import raw_db_ctx
+                        import models as m
+                        with raw_db_ctx() as db:
+                            allowed = m.is_person_allowed_now(db, match.person_id)
+                        if allowed:
+                            _draw_face(annotated, face, match.person_name,
+                                       match.score, color=(0, 255, 0))
+                            _log_recognized(face, match)
+                        else:
+                            unknown_in_frame = True
+                            _draw_face(annotated, face,
+                                       f"{match.person_name} (NO ACCESS)",
+                                       match.score, color=(0, 165, 255))
                     else:
                         unknown_in_frame = True
                         _draw_face(annotated, face, "UNKNOWN", 0.0, color=(0, 0, 220))
@@ -429,6 +472,45 @@ class CameraLoop:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _check_mask(face_crop: np.ndarray) -> tuple[bool, str]:
+    """
+    Detect if the lower face is covered (mask, scarf, balaclava).
+
+    Splits the face crop into upper (eyes/forehead) and lower (nose/mouth)
+    halves and compares skin-tone pixel density. A real unmasked face has
+    skin tone in both halves. A masked face has skin tone concentrated only
+    in the upper half.
+
+    Returns (masked: bool, reason: str).
+    """
+    if face_crop is None or face_crop.size == 0:
+        return False, "no_crop"
+
+    h, w = face_crop.shape[:2]
+    if h < 20 or w < 20:
+        return False, "too_small"
+
+    # Convert to YCrCb — skin tone range is well-defined in this space
+    ycrcb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2YCrCb)
+    # Standard skin-tone range in YCrCb
+    lower = np.array([0,   133, 77],  dtype=np.uint8)
+    upper = np.array([255, 173, 127], dtype=np.uint8)
+    skin_mask = cv2.inRange(ycrcb, lower, upper)
+
+    mid = h // 2
+    upper_half = skin_mask[:mid, :]
+    lower_half = skin_mask[mid:, :]
+
+    upper_density = float(np.sum(upper_half > 0)) / max(upper_half.size, 1)
+    lower_density = float(np.sum(lower_half > 0)) / max(lower_half.size, 1)
+
+    # Masked if upper half has decent skin signal but lower half is mostly absent
+    if upper_density > 0.15 and lower_density < 0.08:
+        return True, f"lower_skin={lower_density:.2f}"
+
+    return False, "ok"
+
 
 def _set_camera_exposure(cap: cv2.VideoCapture, night: bool) -> None:
     """

@@ -250,8 +250,39 @@ def enrolled_detail(person_id: int):
     person = models.get_enrolled_by_id(db, person_id)
     if not person:
         abort(404)
-    images = models.get_images_for_person(db, person_id)
-    return render_template("admin/enrolled_detail.html", person=person, images=images)
+    images    = models.get_images_for_person(db, person_id)
+    schedules = models.get_schedules_for_person(db, person_id)
+    return render_template("admin/enrolled_detail.html", person=person,
+                           images=images, schedules=schedules,
+                           day_names=models.DAY_NAMES)
+
+
+@admin_bp.route("/enrolled/<int:person_id>/schedule/add", methods=["POST"])
+@admin_required
+def schedule_add(person_id: int):
+    db = get_db()
+    if not models.get_enrolled_by_id(db, person_id):
+        abort(404)
+    try:
+        day   = int(request.form["day_of_week"])
+        start = request.form["time_start"].strip()
+        end   = request.form["time_end"].strip()
+        if not (0 <= day <= 6) or not start or not end:
+            raise ValueError
+        models.create_schedule(db, person_id, day, start, end)
+        flash("Schedule added.", "success")
+    except (KeyError, ValueError):
+        flash("Invalid schedule entry.", "danger")
+    return redirect(url_for("admin.enrolled_detail", person_id=person_id))
+
+
+@admin_bp.route("/enrolled/<int:person_id>/schedule/<int:sched_id>/delete", methods=["POST"])
+@admin_required
+def schedule_delete(person_id: int, sched_id: int):
+    db = get_db()
+    models.delete_schedule(db, sched_id)
+    flash("Schedule removed.", "success")
+    return redirect(url_for("admin.enrolled_detail", person_id=person_id))
 
 
 @admin_bp.route("/enrolled/<int:person_id>/edit", methods=["GET", "POST"])
@@ -762,6 +793,42 @@ def api_status():
         "enrolled_count":      len(models.get_all_enrolled(db)),
         "disk_pct":            disk_usage_percent("/"),
     })
+
+
+# ---------------------------------------------------------------------------
+# Heatmap
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/heatmap")
+@operator_required
+def heatmap_page():
+    from heatmap import get_stats
+    stats = get_stats()
+    return render_template("admin/heatmap.html", stats=stats)
+
+
+@admin_bp.route("/api/heatmap.png")
+@login_required
+def heatmap_png():
+    from heatmap import render_heatmap
+    png = render_heatmap(width=640, height=480)
+    return Response(png, mimetype="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@admin_bp.route("/api/heatmap/stats")
+@login_required
+def heatmap_stats():
+    from heatmap import get_stats
+    return jsonify(get_stats())
+
+
+@admin_bp.route("/api/heatmap/reset", methods=["POST"])
+@admin_required
+def heatmap_reset():
+    from heatmap import reset
+    reset()
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

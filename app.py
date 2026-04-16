@@ -135,6 +135,7 @@ def create_app() -> Flask:
         return {
             "current_user": current_user(),
             "app_name":     "CacheSec",
+            "enumerate":    enumerate,
         }
 
     # -----------------------------------------------------------------------

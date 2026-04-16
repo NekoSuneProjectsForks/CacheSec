@@ -146,6 +146,20 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 
 -- -------------------------------------------------------------------------
+-- Per-person access schedules
+-- -------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS access_schedules (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id   INTEGER NOT NULL REFERENCES enrolled_people(id) ON DELETE CASCADE,
+    day_of_week INTEGER NOT NULL,   -- 0=Mon … 6=Sun (Python weekday())
+    time_start  TEXT    NOT NULL,   -- "HH:MM" 24-hour
+    time_end    TEXT    NOT NULL,   -- "HH:MM" 24-hour
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_person ON access_schedules(person_id);
+
+-- -------------------------------------------------------------------------
 -- Audit log
 -- -------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_log (

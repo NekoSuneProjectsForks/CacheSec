@@ -308,6 +308,63 @@ def soft_delete_recording(
 
 
 # ---------------------------------------------------------------------------
+# Access schedules
+# ---------------------------------------------------------------------------
+
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def get_schedules_for_person(conn: sqlite3.Connection, person_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM access_schedules WHERE person_id = ? AND is_active = 1 "
+        "ORDER BY day_of_week, time_start",
+        (person_id,),
+    ).fetchall()
+
+
+def create_schedule(
+    conn: sqlite3.Connection,
+    person_id: int,
+    day_of_week: int,
+    time_start: str,
+    time_end: str,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO access_schedules(person_id, day_of_week, time_start, time_end) "
+        "VALUES (?, ?, ?, ?)",
+        (person_id, day_of_week, time_start, time_end),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def delete_schedule(conn: sqlite3.Connection, schedule_id: int) -> None:
+    conn.execute("DELETE FROM access_schedules WHERE id = ?", (schedule_id,))
+    conn.commit()
+
+
+def is_person_allowed_now(conn: sqlite3.Connection, person_id: int) -> bool:
+    """
+    Return True if the person has no schedules (unrestricted) or has a
+    schedule entry that covers the current local day and time.
+    """
+    from datetime import datetime
+    schedules = get_schedules_for_person(conn, person_id)
+    if not schedules:
+        return True   # no schedule = always allowed
+
+    now = datetime.now()
+    today = now.weekday()   # 0=Mon … 6=Sun
+    current_time = now.strftime("%H:%M")
+
+    for s in schedules:
+        if s["day_of_week"] == today:
+            if s["time_start"] <= current_time <= s["time_end"]:
+                return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------------
 

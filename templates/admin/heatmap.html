@@ -1,0 +1,120 @@
+{% extends "admin/layout.html" %}
+{% block title %}Detection Heatmap{% endblock %}
+{% block page_title %}<i class="bi bi-fire me-2"></i>Detection Heatmap{% endblock %}
+
+{% block content %}
+
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="card cs-stat-card border-0">
+      <div class="card-body">
+        <div class="stat-icon bg-danger bg-opacity-10 text-danger">
+          <i class="bi bi-bullseye"></i>
+        </div>
+        <div class="stat-label">Total Detections</div>
+        <div class="stat-value" id="stat-total">{{ stats.total }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card cs-stat-card border-0">
+      <div class="card-body">
+        <div class="stat-icon bg-warning bg-opacity-10 text-warning">
+          <i class="bi bi-geo-alt-fill"></i>
+        </div>
+        <div class="stat-label">Hotspot</div>
+        <div class="stat-value small" id="stat-hotspot">
+          {% if stats.hotspot %}
+            {{ stats.hotspot.x }}, {{ stats.hotspot.y }}
+          {% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6 d-flex align-items-center gap-2 justify-content-md-end">
+    {% if session.get('role') == 'admin' %}
+    <form method="POST" action="{{ url_for('admin.heatmap_reset') }}">
+      <button class="btn btn-sm btn-outline-danger"
+              onclick="return confirm('Reset heatmap data?')">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+      </button>
+    </form>
+    {% endif %}
+    <button class="btn btn-sm btn-outline-secondary" id="btn-refresh">
+      <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+    </button>
+  </div>
+</div>
+
+<!-- Heatmap overlay on camera frame placeholder -->
+<div class="card cs-card">
+  <div class="card-header cs-card-header">
+    Face Detection Density Map
+    <small class="text-muted ms-2">Blue = rarely detected · Red = frequently detected</small>
+  </div>
+  <div class="card-body p-2 text-center">
+    <div class="position-relative d-inline-block" style="max-width:640px;width:100%;">
+      <!-- Background: latest camera still -->
+      <!-- Camera background loaded via JS to avoid broken-image if offline -->
+      <img id="cam-bg"
+           class="img-fluid rounded w-100"
+           style="opacity:0.35; display:none;"
+           alt="">
+      <!-- Heatmap overlay PNG (BGRA with alpha) -->
+      <img id="heatmap-img"
+           src="{{ url_for('admin.heatmap_png') }}"
+           class="position-absolute top-0 start-0 w-100 h-100 rounded"
+           style="object-fit:fill;"
+           alt="Heatmap">
+      <!-- Placeholder if no data -->
+      <div id="no-data-msg" class="position-absolute top-50 start-50 translate-middle text-muted"
+           style="{% if stats.total > 0 %}display:none{% endif %}">
+        <i class="bi bi-camera-video-off fs-2 d-block mb-2"></i>
+        No detections recorded yet
+      </div>
+    </div>
+    <div class="mt-2">
+      <!-- Colour scale legend -->
+      <div class="d-flex justify-content-center align-items-center gap-2 small text-muted">
+        <span>Low</span>
+        <div style="width:160px;height:12px;border-radius:4px;
+                    background:linear-gradient(to right,#00f,#0ff,#0f0,#ff0,#f00);"></div>
+        <span>High</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const heatmapImg = document.getElementById('heatmap-img');
+  const statTotal  = document.getElementById('stat-total');
+  const statHot    = document.getElementById('stat-hotspot');
+  const noDataMsg  = document.getElementById('no-data-msg');
+
+  function refresh() {
+    heatmapImg.src = '{{ url_for("admin.heatmap_png") }}?t=' + Date.now();
+    fetch('{{ url_for("admin.heatmap_stats") }}')
+      .then(r => r.json())
+      .then(d => {
+        statTotal.textContent = d.total;
+        if (d.hotspot) {
+          statHot.textContent = d.hotspot.x + ', ' + d.hotspot.y;
+          noDataMsg.style.display = 'none';
+        } else {
+          statHot.textContent = '—';
+          noDataMsg.style.display = '';
+        }
+      }).catch(() => {});
+  }
+
+  document.getElementById('btn-refresh').addEventListener('click', refresh);
+
+  // Auto-refresh every 15 seconds
+  setInterval(refresh, 15000);
+})();
+</script>
+{% endblock %}
