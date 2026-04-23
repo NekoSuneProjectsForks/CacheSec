@@ -75,6 +75,18 @@ DISCORD_COOLDOWN_SECONDS: int = _int("DISCORD_COOLDOWN_SECONDS", 60)
 # ---------------------------------------------------------------------------
 KINECT_ENABLED: bool = _bool("KINECT_ENABLED", True)   # auto-detect on startup
 KINECT_TILT:    int  = _int("KINECT_TILT", 0)          # motor tilt degrees (-27 to +27)
+# Keep this off for SLS: a separate motor/LED handle can block libfreenect's
+# sync video/depth stream on some hosts.
+KINECT_MOTOR_ENABLED: bool = _bool("KINECT_MOTOR_ENABLED", False)
+
+# ---------------------------------------------------------------------------
+# SLS / skeleton overlay
+# ---------------------------------------------------------------------------
+SLS_ENABLED: bool = _bool("SLS_ENABLED", True)
+SLS_MODE: str = os.getenv("SLS_MODE", "night").strip().lower()
+if SLS_MODE not in {"night", "always"}:
+    SLS_MODE = "night"
+SLS_MAX_PEOPLE: int = _int("SLS_MAX_PEOPLE", 4)
 
 # ---------------------------------------------------------------------------
 # Sound

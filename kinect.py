@@ -188,8 +188,16 @@ class KinectSource:
             logger.warning("KinectSource: %s", self._error)
             return False
 
-        # Open a motor/LED handle on the main thread
-        self._open_motor()
+        try:
+            import config
+            motor_enabled = config.KINECT_MOTOR_ENABLED
+        except Exception:
+            motor_enabled = False
+
+        # Keep motor/LED opt-in. On some libfreenect builds a second device
+        # handle blocks the sync video/depth context needed for SLS.
+        if motor_enabled:
+            self._open_motor()
 
         self._stop_flag.clear()
         self._thread = threading.Thread(

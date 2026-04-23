@@ -49,6 +49,9 @@ _camera_status      = {
     "error":        "",
     "night_vision": False,
     "source":       "webcam",   # "webcam" or "kinect"
+    "sls_enabled":  config.SLS_ENABLED,
+    "sls_active":   False,
+    "depth":        False,
 }
 
 # ---------------------------------------------------------------------------
@@ -245,6 +248,9 @@ class CameraLoop:
 
         _camera_status["running"] = True
         _camera_status["error"]   = ""
+        _camera_status["sls_enabled"] = config.SLS_ENABLED
+        _camera_status["sls_active"] = False
+        _camera_status["depth"] = False
 
         # ---- Try Kinect first, fall back to webcam ----
         from kinect import get_kinect, kinect_available, KinectLED
@@ -259,20 +265,28 @@ class CameraLoop:
                 logger.info("Using Kinect as camera source")
                 cap = None
 
-                # Check brightness of first frame — if already dark, start in IR
-                first = kinect.read_frame()
-                if first is not None:
-                    gray_mean = float(np.mean(cv2.cvtColor(first, cv2.COLOR_BGR2GRAY)))
-                    if gray_mean < NIGHT_VISION_THRESHOLD:
-                        logger.info("Room already dark (%.1f) — starting Kinect in IR mode", gray_mean)
-                        _night_vision_active = True
-                        _camera_status["night_vision"] = True
-                        kinect.set_mode("ir")
-                        kinect.set_led(KinectLED.BLINK_GREEN)
+                if config.SLS_ENABLED and config.SLS_MODE == "always":
+                    logger.info("SLS always mode enabled — starting Kinect in IR/depth mode")
+                    _night_vision_active = True
+                    _camera_status["night_vision"] = True
+                    _camera_status["sls_active"] = True
+                    kinect.set_mode("ir")
+                    kinect.set_led(KinectLED.BLINK_GREEN)
+                else:
+                    # Check brightness of first frame — if already dark, start in IR
+                    first = kinect.read_frame()
+                    if first is not None:
+                        gray_mean = float(np.mean(cv2.cvtColor(first, cv2.COLOR_BGR2GRAY)))
+                        if gray_mean < NIGHT_VISION_THRESHOLD:
+                            logger.info("Room already dark (%.1f) — starting Kinect in IR mode", gray_mean)
+                            _night_vision_active = True
+                            _camera_status["night_vision"] = True
+                            kinect.set_mode("ir")
+                            kinect.set_led(KinectLED.BLINK_GREEN)
+                        else:
+                            kinect.set_led(KinectLED.GREEN)
                     else:
                         kinect.set_led(KinectLED.GREEN)
-                else:
-                    kinect.set_led(KinectLED.GREEN)
             else:
                 logger.warning("Kinect detected but failed to start: %s — falling back to webcam",
                                kinect.error)
@@ -314,42 +328,61 @@ class CameraLoop:
 
                 # ---- Night-vision ----
                 if use_kinect:
-                    # Skip brightness check for a few frames after a mode switch
-                    # to let the Kinect flush its old-stream buffer (3-frame flush
-                    # in kinect.py) before we evaluate brightness again.
-                    kinect_settle = getattr(self, '_kinect_settle', 0)
-                    if kinect_settle > 0:
-                        self._kinect_settle = kinect_settle - 1
-                    else:
-                        gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
-                        if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
+                    if config.SLS_ENABLED and config.SLS_MODE == "always":
+                        if not _night_vision_active or kinect.get_mode() != "ir":
                             _night_vision_active = True
                             _camera_status["night_vision"] = True
                             kinect.set_mode("ir")
                             kinect.set_led(KinectLED.BLINK_GREEN)
-                            self._kinect_settle = 6   # skip 6 frames after switch
-                            logger.info("Kinect → IR mode (brightness=%.1f)", gray_mean)
-                        elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
-                            _night_vision_active = False
-                            _camera_status["night_vision"] = False
-                            kinect.set_mode("rgb")
-                            kinect.set_led(KinectLED.GREEN)
-                            self._kinect_settle = 6
-                            logger.info("Kinect → RGB mode (brightness=%.1f)", gray_mean)
+                    else:
+                        # Skip brightness check for a few frames after a mode switch
+                        # to let the Kinect flush its old-stream buffer before we
+                        # evaluate brightness again.
+                        kinect_settle = getattr(self, '_kinect_settle', 0)
+                        if kinect_settle > 0:
+                            self._kinect_settle = kinect_settle - 1
+                        else:
+                            gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                            if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
+                                _night_vision_active = True
+                                _camera_status["night_vision"] = True
+                                kinect.set_mode("ir")
+                                kinect.set_led(KinectLED.BLINK_GREEN)
+                                self._kinect_settle = 6   # skip 6 frames after switch
+                                logger.info("Kinect → IR mode (brightness=%.1f)", gray_mean)
+                            elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
+                                _night_vision_active = False
+                                _camera_status["night_vision"] = False
+                                kinect.set_mode("rgb")
+                                kinect.set_led(KinectLED.GREEN)
+                                self._kinect_settle = 6
+                                logger.info("Kinect → RGB mode (brightness=%.1f)", gray_mean)
 
                     # kinect.read_frame() returns plain BGR in RGB mode and
                     # CLAHE-enhanced grayscale-as-BGR in IR mode — no further processing
                     display_frame = frame
 
-                    # SLS skeleton overlay — only in IR/night mode using depth data
-                    if _night_vision_active:
+                    # SLS skeleton overlay — uses Kinect depth data.
+                    sls_active = bool(
+                        config.SLS_ENABLED
+                        and (_night_vision_active or config.SLS_MODE == "always")
+                    )
+                    _camera_status["sls_active"] = sls_active
+                    if sls_active:
                         depth_for_skel = kinect.read_depth()
+                        _camera_status["depth"] = depth_for_skel is not None
                         if depth_for_skel is not None:
                             from skeleton import overlay_skeletons
                             display_frame = overlay_skeletons(
-                                display_frame.copy(), depth_for_skel
+                                display_frame.copy(),
+                                depth_for_skel,
+                                max_people=config.SLS_MAX_PEOPLE,
                             )
+                    else:
+                        _camera_status["depth"] = kinect.read_depth() is not None
                 else:
+                    _camera_status["sls_active"] = False
+                    _camera_status["depth"] = False
                     # Webcam: software NV filter
                     gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
                     if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:

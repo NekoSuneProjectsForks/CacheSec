@@ -12,6 +12,9 @@
           <span class="badge bg-secondary d-none" id="nv-badge">
             <i class="bi bi-moon-stars-fill me-1"></i>Night Vision
           </span>
+          <span class="badge bg-info text-dark d-none" id="sls-badge">
+            <i class="bi bi-person-bounding-box me-1"></i>SLS
+          </span>
           <span class="badge bg-success blink-dot"><i class="bi bi-circle-fill me-1"></i>LIVE</span>
         </div>
       </div>
@@ -22,7 +25,7 @@
       </div>
       <div class="card-footer text-muted small">
         Frame is MJPEG stream from the detection process. Annotations show bounding boxes and recognition results.
-        Night-vision filter activates automatically when the scene is dark.
+        Night-vision filter activates automatically when the scene is dark. SLS appears when Kinect depth is active.
       </div>
     </div>
   </div>
@@ -33,6 +36,7 @@
 <script>
 (function () {
   const nvBadge = document.getElementById('nv-badge');
+  const slsBadge = document.getElementById('sls-badge');
 
   function pollStatus() {
     fetch('/admin/api/status')
@@ -44,6 +48,11 @@
           nvBadge.classList.add('bg-success');
         } else {
           nvBadge.classList.add('d-none');
+        }
+        if (d.sls_active && d.depth) {
+          slsBadge.classList.remove('d-none');
+        } else {
+          slsBadge.classList.add('d-none');
         }
       })
       .catch(() => {});
