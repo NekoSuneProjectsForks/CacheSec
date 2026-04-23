@@ -59,6 +59,7 @@ CAMERA_PREFERRED_SOURCE: str = os.getenv("CAMERA_PREFERRED_SOURCE", "webcam").st
 if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect", "ip"}:
     CAMERA_PREFERRED_SOURCE = "webcam"
 IP_CAMERA_URL: str = os.getenv("IP_CAMERA_URL", "").strip()
+IP_CAMERA_URLS: str = os.getenv("IP_CAMERA_URLS", "").strip()
 IP_CAMERA_RTSP_TRANSPORT: str = os.getenv("IP_CAMERA_RTSP_TRANSPORT", "tcp").strip().lower()
 if IP_CAMERA_RTSP_TRANSPORT not in {"tcp", "udp", "udp_multicast", "http"}:
     IP_CAMERA_RTSP_TRANSPORT = "tcp"

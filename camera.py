@@ -30,6 +30,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 
 import cv2
 import numpy as np
@@ -82,6 +83,38 @@ def _set_latest_jpeg(frame: np.ndarray) -> None:
 
 def get_camera_status() -> dict:
     return dict(_camera_status)
+
+
+def get_live_sources() -> list[dict]:
+    preferred = _live_camera_preferred_source()
+    sources = [{
+        "id": "primary",
+        "label": "Primary Detection Feed",
+        "kind": "primary",
+        "active": True,
+        "detail": _camera_status.get("source", preferred),
+    }]
+
+    # If detection is running from IP/Kinect, the local USB camera can still be
+    # opened as a separate live-only feed.
+    if preferred != "webcam":
+        sources.append({
+            "id": "webcam",
+            "label": f"USB / Pi Camera {config.CAMERA_INDEX}",
+            "kind": "webcam",
+            "active": False,
+            "detail": f"index {config.CAMERA_INDEX}",
+        })
+
+    for idx, item in enumerate(_configured_ip_sources(), start=1):
+        sources.append({
+            "id": f"ip{idx}",
+            "label": item["label"],
+            "kind": "ip",
+            "active": False,
+            "detail": _redact_url(item["url"]),
+        })
+    return sources
 
 
 # ---------------------------------------------------------------------------
@@ -250,12 +283,13 @@ class CameraLoop:
         if transport not in {"tcp", "udp", "udp_multicast", "http"}:
             transport = "tcp"
 
-        # OpenCV forwards these options to its ffmpeg backend. TCP is generally
-        # more reliable for wireless RTSP cameras; nobuffer keeps latency down.
-        if url.lower().startswith("rtsp://"):
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-                f"rtsp_transport;{transport}|fflags;nobuffer|max_delay;500000|stimeout;5000000"
-            )
+        url = _normalize_camera_url(url)
+        if not _is_supported_camera_url(url):
+            logger.error("Unsupported IP camera URL: %s", _redact_url(url))
+            _camera_status["error"] = "IP camera URL must use rtsp://, http://, or https://"
+            return None
+
+        _set_ffmpeg_capture_options(url, transport)
 
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         if not cap.isOpened():
@@ -396,7 +430,7 @@ class CameraLoop:
             _camera_status["source"] = primary_source_label()
             cap = try_open_primary_source()
             if cap is None:
-                logger.warning("Preferred webcam unavailable — trying Kinect fallback")
+                logger.warning("Preferred %s camera unavailable; trying Kinect fallback", primary_source_label())
                 use_kinect = start_kinect_source()
                 _camera_status["error"] = "" if use_kinect else _camera_status["error"]
             else:
@@ -507,25 +541,34 @@ class CameraLoop:
                 else:
                     _camera_status["sls_active"] = False
                     _camera_status["depth"] = False
-                    # Webcam: software NV filter
-                    gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
-                    if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
-                        if switch_to_kinect_night(gray_mean):
-                            use_kinect = True
-                            cap = None
-                            frame_count = 0
-                            continue
-                        _night_vision_active = True
-                        _camera_status["night_vision"] = True
-                        _set_camera_exposure(cap, night=True)
-                        logger.info("Night-vision ON (brightness=%.1f)", gray_mean)
-                    elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
-                        _night_vision_active = False
-                        _camera_status["night_vision"] = False
-                        _set_camera_exposure(cap, night=False)
-                        logger.info("Night-vision OFF (brightness=%.1f)", gray_mean)
+                    if preferred_source == "ip":
+                        # IP cameras usually handle IR/night mode in firmware.
+                        # Do not double-process their frames with the software
+                        # green night-vision filter.
+                        if _night_vision_active:
+                            _night_vision_active = False
+                            _camera_status["night_vision"] = False
+                        display_frame = frame
+                    else:
+                        # Webcam: software NV filter
+                        gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                        if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
+                            if switch_to_kinect_night(gray_mean):
+                                use_kinect = True
+                                cap = None
+                                frame_count = 0
+                                continue
+                            _night_vision_active = True
+                            _camera_status["night_vision"] = True
+                            _set_camera_exposure(cap, night=True)
+                            logger.info("Night-vision ON (brightness=%.1f)", gray_mean)
+                        elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
+                            _night_vision_active = False
+                            _camera_status["night_vision"] = False
+                            _set_camera_exposure(cap, night=False)
+                            logger.info("Night-vision OFF (brightness=%.1f)", gray_mean)
 
-                    display_frame = _apply_night_vision(frame) if _night_vision_active else frame
+                        display_frame = _apply_night_vision(frame) if _night_vision_active else frame
 
                 # Record the operator-visible image: normal frames in daylight,
                 # night-vision/SLS-enhanced frames when those modes are active.
@@ -712,6 +755,72 @@ def _live_camera_preferred_source() -> str:
     source = _live_setting("camera_preferred_source", config.CAMERA_PREFERRED_SOURCE)
     source = source.strip().lower()
     return source if source in {"webcam", "ip", "kinect"} else "webcam"
+
+
+def _configured_ip_sources(include_primary: bool | None = None) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    if include_primary is None:
+        include_primary = _live_camera_preferred_source() != "ip"
+
+    primary = _normalize_camera_url(_live_setting("ip_camera_url", config.IP_CAMERA_URL))
+    if include_primary and _is_supported_camera_url(primary):
+        entries.append({"label": "Primary IP Camera", "url": primary})
+
+    raw = _live_setting("ip_camera_urls", config.IP_CAMERA_URLS)
+    for chunk in raw.replace(",", "\n").splitlines():
+        item = chunk.strip()
+        if not item or item.startswith("#"):
+            continue
+        if "|" in item:
+            label, url = item.split("|", 1)
+            label = label.strip() or f"IP Camera {len(entries) + 1}"
+            url = url.strip()
+        else:
+            label = f"IP Camera {len(entries) + 1}"
+            url = item
+        url = _normalize_camera_url(url)
+        if _is_supported_camera_url(url):
+            entries.append({"label": label, "url": url})
+    return entries
+
+
+def _normalize_camera_url(raw: str) -> str:
+    url = (raw or "").strip()
+    if not url or "://" in url:
+        return url
+    host = url.split("/", 1)[0]
+    if "." in host or ":" in host or host.lower() == "localhost":
+        return f"http://{url}"
+    return url
+
+
+def _is_supported_camera_url(url: str) -> bool:
+    scheme = urlsplit(url).scheme.lower()
+    return scheme in {"rtsp", "rtsps", "http", "https"}
+
+
+def _set_ffmpeg_capture_options(url: str, transport: str | None = None) -> None:
+    if not url.lower().startswith(("rtsp://", "rtsps://")):
+        return
+    if not transport:
+        transport = _live_setting(
+            "ip_camera_rtsp_transport", config.IP_CAMERA_RTSP_TRANSPORT
+        ).strip().lower()
+    if transport not in {"tcp", "udp", "udp_multicast", "http"}:
+        transport = "tcp"
+    # OpenCV forwards these options to its ffmpeg backend. TCP is generally
+    # more reliable for wireless RTSP cameras; nobuffer keeps latency down.
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+        f"rtsp_transport;{transport}|fflags;nobuffer|max_delay;500000|stimeout;5000000"
+    )
+
+
+def _looks_like_snapshot_url(url: str) -> bool:
+    path = urlsplit(url).path.lower()
+    if path.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return True
+    lowered = url.lower()
+    return any(token in lowered for token in ("snapshot", "image", "still", "jpg"))
 
 
 def _redact_url(url: str) -> str:
@@ -931,13 +1040,101 @@ def get_camera_loop() -> CameraLoop:
     return _camera_loop
 
 
-def generate_mjpeg():
+def generate_mjpeg(source_id: str = "primary"):
     """Generator for Flask MJPEG streaming endpoint."""
+    if source_id == "primary":
+        while True:
+            frame = get_latest_jpeg()
+            if frame:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+                )
+            time.sleep(0.05)  # ~20 FPS max to browser
+        return
+
+    if source_id == "webcam":
+        yield from _generate_capture_mjpeg(config.CAMERA_INDEX, label="USB webcam")
+        return
+
+    if source_id.startswith("ip"):
+        try:
+            idx = int(source_id[2:]) - 1
+        except ValueError:
+            idx = -1
+        sources = _configured_ip_sources()
+        if 0 <= idx < len(sources):
+            yield from _generate_ip_mjpeg(sources[idx]["url"], sources[idx]["label"])
+            return
+
+    yield from _generate_error_mjpeg()
+
+
+def _generate_ip_mjpeg(url: str, label: str):
+    if _looks_like_snapshot_url(url):
+        yield from _generate_snapshot_mjpeg(url, label)
+        return
+    yield from _generate_capture_mjpeg(url, label=label)
+
+
+def _generate_capture_mjpeg(source, label: str = "camera"):
+    if isinstance(source, str):
+        source = _normalize_camera_url(source)
+        if not _is_supported_camera_url(source):
+            logger.warning("Live feed has unsupported URL for %s: %s", label, _redact_url(source))
+            yield from _generate_error_mjpeg()
+            return
+        _set_ffmpeg_capture_options(source)
+        cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+    else:
+        cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        cap.release()
+        logger.warning("Live feed could not open %s", label)
+        yield from _generate_error_mjpeg()
+        return
+
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                time.sleep(0.2)
+                continue
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+            time.sleep(0.03)
+    finally:
+        cap.release()
+
+
+def _generate_snapshot_mjpeg(url: str, label: str):
     while True:
-        frame = get_latest_jpeg()
-        if frame:
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-            )
-        time.sleep(0.05)  # ~20 FPS max to browser
+        try:
+            req = Request(url, headers={"User-Agent": "CacheSec/1.0"})
+            with urlopen(req, timeout=5) as resp:
+                data = resp.read()
+            arr = np.frombuffer(data, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame is None:
+                raise ValueError("snapshot did not decode as an image")
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+        except Exception as exc:
+            logger.debug("Snapshot live feed failed for %s: %s", label, exc)
+            yield from _generate_error_mjpeg(single=True)
+        time.sleep(1.0)
+
+
+def _generate_error_mjpeg(single: bool = False):
+    img = np.zeros((240, 426, 3), dtype=np.uint8)
+    cv2.putText(img, "No feed", (150, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180, 180, 180), 2)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    payload = buf.tobytes() if ok else b""
+    while True:
+        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n"
+        if single:
+            return
+        time.sleep(1.0)

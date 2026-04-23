@@ -210,6 +210,7 @@ def init_db() -> None:
             "frame_skip":               str(config.FRAME_SKIP),
             "camera_preferred_source":  config.CAMERA_PREFERRED_SOURCE,
             "ip_camera_url":            config.IP_CAMERA_URL,
+            "ip_camera_urls":           config.IP_CAMERA_URLS,
             "ip_camera_rtsp_transport": config.IP_CAMERA_RTSP_TRANSPORT,
             "unknown_cooldown_seconds": str(config.UNKNOWN_COOLDOWN_SECONDS),
             "min_recording_seconds":    str(config.MIN_RECORDING_SECONDS),

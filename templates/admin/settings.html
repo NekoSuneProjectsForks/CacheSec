@@ -55,6 +55,18 @@
             </div>
           </div>
 
+          <div class="col-12">
+            <label class="form-label">Extra Live IP Cameras</label>
+            <textarea name="ip_camera_urls"
+                      class="form-control bg-secondary border-secondary text-light"
+                      rows="4"
+                      placeholder="Front Door|rtsp://user:pass@192.168.1.51:554/stream1&#10;Garage|https://camera.example.com/live.m3u8">{{ settings.ip_camera_urls or '' }}</textarea>
+            <div class="form-text text-muted">
+              Optional live-view cameras, one per line or comma-separated. Supports RTSP,
+              HLS .m3u8, MJPEG/HTTP video, and periodic image snapshot URLs.
+            </div>
+          </div>
+
           <div class="col-md-6">
             <label class="form-label">IP Camera RTSP Transport</label>
             <select name="ip_camera_rtsp_transport"

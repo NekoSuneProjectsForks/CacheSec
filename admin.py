@@ -103,15 +103,17 @@ def dashboard():
 @admin_bp.route("/live")
 @operator_required
 def live_feed():
-    return render_template("admin/live.html")
+    from camera import get_live_sources
+    return render_template("admin/live.html", live_sources=get_live_sources())
 
 
 @admin_bp.route("/live/stream")
+@admin_bp.route("/live/stream/<source_id>")
 @operator_required
-def live_stream():
+def live_stream(source_id: str = "primary"):
     from camera import generate_mjpeg
     return Response(
-        generate_mjpeg(),
+        generate_mjpeg(source_id),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
@@ -762,6 +764,7 @@ def settings():
         "frame_skip",
         "camera_preferred_source",
         "ip_camera_url",
+        "ip_camera_urls",
         "ip_camera_rtsp_transport",
         "unknown_cooldown_seconds",
         "min_recording_seconds",
