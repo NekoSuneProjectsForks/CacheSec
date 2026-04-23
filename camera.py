@@ -260,6 +260,7 @@ class CameraLoop:
         cap = None
 
         def start_kinect_source() -> bool:
+            global _night_vision_active
             if not (config.KINECT_ENABLED and kinect_available()):
                 return False
             if kinect.start():
@@ -296,6 +297,41 @@ class CameraLoop:
                 logger.warning("Kinect detected but failed to start: %s — falling back to webcam",
                                kinect.error)
                 return False
+
+        def switch_to_kinect_night(gray_mean: float) -> bool:
+            global _night_vision_active
+            if not config.KINECT_NIGHT_VISION_ENABLED:
+                return False
+            logger.info("Main camera dark (brightness=%.1f) - trying Kinect IR night vision", gray_mean)
+            if not start_kinect_source():
+                return False
+            if cap is not None:
+                cap.release()
+            _night_vision_active = True
+            _camera_status["night_vision"] = True
+            _camera_status["source"] = "kinect"
+            kinect.set_mode("ir")
+            kinect.set_led(KinectLED.BLINK_GREEN)
+            self._kinect_settle = 10
+            logger.info("Switched to Kinect IR night vision")
+            return True
+
+        def switch_to_webcam_day(gray_mean: float):
+            global _night_vision_active
+            new_cap = self.__try_open()
+            if new_cap is None:
+                return None
+            try:
+                kinect.stop()
+            except Exception:
+                pass
+            _night_vision_active = False
+            _camera_status["night_vision"] = False
+            _camera_status["sls_active"] = False
+            _camera_status["depth"] = False
+            _camera_status["source"] = "webcam"
+            logger.info("Kinect bright (brightness=%.1f) - switched back to main camera", gray_mean)
+            return new_cap
 
         if config.CAMERA_PREFERRED_SOURCE == "webcam":
             _camera_status["source"] = "webcam"
@@ -370,6 +406,16 @@ class CameraLoop:
                                 self._kinect_settle = 6   # skip 6 frames after switch
                                 logger.info("Kinect → IR mode (brightness=%.1f)", gray_mean)
                             elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
+                                if (
+                                    config.CAMERA_PREFERRED_SOURCE == "webcam"
+                                    and config.KINECT_NIGHT_VISION_ENABLED
+                                ):
+                                    new_cap = switch_to_webcam_day(gray_mean)
+                                    if new_cap is not None:
+                                        cap = new_cap
+                                        use_kinect = False
+                                        frame_count = 0
+                                        continue
                                 _night_vision_active = False
                                 _camera_status["night_vision"] = False
                                 kinect.set_mode("rgb")
@@ -405,6 +451,11 @@ class CameraLoop:
                     # Webcam: software NV filter
                     gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
                     if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
+                        if switch_to_kinect_night(gray_mean):
+                            use_kinect = True
+                            cap = None
+                            frame_count = 0
+                            continue
                         _night_vision_active = True
                         _camera_status["night_vision"] = True
                         _set_camera_exposure(cap, night=True)

@@ -81,6 +81,7 @@ KINECT_TILT:    int  = _int("KINECT_TILT", 0)          # motor tilt degrees (-27
 # Keep this off for SLS: a separate motor/LED handle can block libfreenect's
 # sync video/depth stream on some hosts.
 KINECT_MOTOR_ENABLED: bool = _bool("KINECT_MOTOR_ENABLED", False)
+KINECT_NIGHT_VISION_ENABLED: bool = _bool("KINECT_NIGHT_VISION_ENABLED", True)
 
 # ---------------------------------------------------------------------------
 # SLS / skeleton overlay
