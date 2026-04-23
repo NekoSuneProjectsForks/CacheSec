@@ -363,7 +363,7 @@ class Recorder:
             "-movflags", "+faststart", # moov atom at front — essential for browser streaming
         ]
         if audio_path:
-            cmd += ["-c:a", "aac", "-b:a", "96k", "-shortest"]
+            cmd += ["-c:a", "aac", "-b:a", "96k", "-ac", "1", "-shortest"]
         else:
             cmd += ["-an"]  # no audio track
         cmd.append(mp4_path)
@@ -517,9 +517,7 @@ def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]
         "-f", "alsa",
         "-thread_queue_size", "512",
         "-i", source,
-        "-ac", "1",
-        "-ar", "44100",
-        "-c:a", "pcm_s16le",
+        "-c:a", "copy",
         audio_path,
     ]
     try:
