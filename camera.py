@@ -25,6 +25,8 @@ from __future__ import annotations
 import io
 import logging
 import os
+import shutil
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -112,9 +114,123 @@ def get_live_sources() -> list[dict]:
             "label": item["label"],
             "kind": "ip",
             "active": False,
-            "detail": _redact_url(item["url"]),
+            "detail": _display_source_url(item["url"]),
         })
     return sources
+
+
+class FFmpegFrameCapture:
+    """Minimal VideoCapture-like wrapper for HLS streams via system ffmpeg."""
+
+    def __init__(self, url: str, width: int, height: int, fps: int = 15):
+        self.url = url
+        self.width = width
+        self.height = height
+        self.fps = max(1, fps)
+        self._frame_bytes = self.width * self.height * 3
+        self._proc: subprocess.Popen[bytes] | None = None
+
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            logger.warning("ffmpeg is not available for HLS camera support")
+            return
+
+        vf = (
+            f"fps={self.fps},"
+            f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,"
+            f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2"
+        )
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-nostdin",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-rw_timeout", "5000000",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "2",
+            "-i", url,
+            "-an",
+            "-vf", vf,
+            "-pix_fmt", "bgr24",
+            "-vcodec", "rawvideo",
+            "-f", "rawvideo",
+            "pipe:1",
+        ]
+        try:
+            self._proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=self._frame_bytes * 2,
+            )
+        except Exception as exc:
+            logger.warning("Failed to start ffmpeg for %s: %s", _redact_url(url), exc)
+            self._proc = None
+
+    def isOpened(self) -> bool:
+        return bool(self._proc and self._proc.poll() is None and self._proc.stdout)
+
+    def set(self, _prop_id: int, _value: float) -> bool:
+        return False
+
+    def get(self, prop_id: int) -> float:
+        if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+            return float(self.width)
+        if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            return float(self.height)
+        return 0.0
+
+    def _read_exact(self, size: int) -> bytes:
+        if not self._proc or not self._proc.stdout:
+            return b""
+        data = bytearray()
+        while len(data) < size:
+            chunk = self._proc.stdout.read(size - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        return bytes(data)
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if not self.isOpened():
+            return False, None
+        payload = self._read_exact(self._frame_bytes)
+        if len(payload) != self._frame_bytes:
+            self.release()
+            return False, None
+        frame = np.frombuffer(payload, dtype=np.uint8)
+        return True, frame.reshape((self.height, self.width, 3))
+
+    def release(self) -> None:
+        proc = self._proc
+        self._proc = None
+        if not proc:
+            return
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        try:
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+
+CaptureHandle = cv2.VideoCapture | FFmpegFrameCapture
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +386,7 @@ class CameraLoop:
                     idx, config.FRAME_WIDTH, config.FRAME_HEIGHT, exp, gain)
         return cap
 
-    def _open_ip_camera(self) -> cv2.VideoCapture | None:
+    def _open_ip_camera(self) -> CaptureHandle | None:
         url = _live_setting("ip_camera_url", config.IP_CAMERA_URL).strip()
         if not url:
             logger.error("IP camera source selected but IP_CAMERA_URL is empty")
@@ -289,30 +405,10 @@ class CameraLoop:
             _camera_status["error"] = "IP camera URL must use rtsp://, http://, or https://"
             return None
 
-        _set_ffmpeg_capture_options(url, transport)
-
-        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-        if not cap.isOpened():
-            cap.release()
+        cap = _open_stream_capture(url, "IP camera", transport=transport)
+        if cap is None:
             logger.error("Cannot open IP camera stream: %s", _redact_url(url))
             _camera_status["error"] = "IP camera unavailable"
-            return None
-
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
-
-        # Pull a few packets so bad credentials/offline streams fail early.
-        ok = False
-        for _ in range(10):
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                break
-            time.sleep(0.1)
-        if not ok:
-            cap.release()
-            logger.error("IP camera opened but produced no frames: %s", _redact_url(url))
-            _camera_status["error"] = "IP camera produced no frames"
             return None
 
         logger.info("IP camera opened: %s", _redact_url(url))
@@ -346,7 +442,7 @@ class CameraLoop:
         def primary_source_label() -> str:
             return "ip" if preferred_source == "ip" else "webcam"
 
-        def try_open_primary_source() -> cv2.VideoCapture | None:
+        def try_open_primary_source() -> CaptureHandle | None:
             return self.__try_open_primary(preferred_source)
 
         def start_kinect_source() -> bool:
@@ -723,7 +819,7 @@ class CameraLoop:
         _camera_status["error"] = "Camera unavailable"
         return None
 
-    def __try_open_primary(self, preferred_source: str) -> cv2.VideoCapture | None:
+    def __try_open_primary(self, preferred_source: str) -> CaptureHandle | None:
         if preferred_source == "ip":
             for attempt in range(5):
                 if self._stop_flag.is_set():
@@ -801,6 +897,7 @@ def _is_supported_camera_url(url: str) -> bool:
 
 def _set_ffmpeg_capture_options(url: str, transport: str | None = None) -> None:
     if not url.lower().startswith(("rtsp://", "rtsps://")):
+        os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
         return
     if not transport:
         transport = _live_setting(
@@ -813,6 +910,70 @@ def _set_ffmpeg_capture_options(url: str, transport: str | None = None) -> None:
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
         f"rtsp_transport;{transport}|fflags;nobuffer|max_delay;500000|stimeout;5000000"
     )
+
+
+def _looks_like_hls_url(url: str) -> bool:
+    path = urlsplit(url).path.lower()
+    return path.endswith((".m3u8", ".m3u"))
+
+
+def _prime_capture(cap: CaptureHandle, attempts: int = 10) -> bool:
+    for _ in range(max(1, attempts)):
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _open_hls_capture(url: str, label: str) -> FFmpegFrameCapture | None:
+    cap = FFmpegFrameCapture(
+        url,
+        width=config.FRAME_WIDTH,
+        height=config.FRAME_HEIGHT,
+        fps=15,
+    )
+    if not cap.isOpened():
+        cap.release()
+        logger.warning("ffmpeg HLS open failed for %s: %s", label, _redact_url(url))
+        return None
+    if not _prime_capture(cap, attempts=5):
+        cap.release()
+        logger.warning("ffmpeg HLS produced no frames for %s: %s", label, _redact_url(url))
+        return None
+    logger.info("Opened HLS stream via ffmpeg for %s: %s", label, _redact_url(url))
+    return cap
+
+
+def _open_stream_capture(
+    url: str,
+    label: str,
+    transport: str | None = None,
+) -> CaptureHandle | None:
+    url = _normalize_camera_url(url)
+    if not _is_supported_camera_url(url):
+        return None
+
+    # Prefer system ffmpeg for HLS playlists because OpenCV network support
+    # varies a lot between builds, while ffmpeg handles .m3u8 reliably.
+    if _looks_like_hls_url(url):
+        hls_cap = _open_hls_capture(url, label)
+        if hls_cap is not None:
+            return hls_cap
+
+    _set_ffmpeg_capture_options(url, transport)
+    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        cap.release()
+        return None
+
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+    if not _prime_capture(cap, attempts=10):
+        cap.release()
+        return None
+    return cap
 
 
 def _looks_like_snapshot_url(url: str) -> bool:
@@ -832,6 +993,17 @@ def _redact_url(url: str) -> str:
         return urlunsplit((parts.scheme, f"***:***@{host}", parts.path, parts.query, parts.fragment))
     except Exception:
         return "<invalid-url>"
+
+
+def _display_source_url(url: str) -> str:
+    try:
+        parts = urlsplit(_redact_url(url))
+        suffix = "?..." if parts.query else ""
+        text = urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")) + suffix
+        return text if len(text) <= 120 else text[:117] + "..."
+    except Exception:
+        text = _redact_url(url)
+        return text if len(text) <= 120 else text[:117] + "..."
 
 
 def _check_mask(face_crop: np.ndarray) -> tuple[bool, str]:
@@ -1084,17 +1256,18 @@ def _generate_capture_mjpeg(source, label: str = "camera"):
             logger.warning("Live feed has unsupported URL for %s: %s", label, _redact_url(source))
             yield from _generate_error_mjpeg()
             return
-        _set_ffmpeg_capture_options(source)
-        cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+        cap = _open_stream_capture(source, label)
     else:
         cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        cap.release()
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    if cap is None or not cap.isOpened():
+        if cap is not None:
+            cap.release()
         logger.warning("Live feed could not open %s", label)
         yield from _generate_error_mjpeg()
         return
 
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     try:
         while True:
             ok, frame = cap.read()
