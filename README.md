@@ -15,8 +15,8 @@ admin dashboard accessible locally or remotely through Cloudflare Tunnel.
 | Web dashboard | Flask + Bootstrap 5 dark theme |
 | Auth | bcrypt passwords, session auth, rate limiting, lockout |
 | RBAC | admin / operator / viewer roles |
-| Alerts | Discord webhook with snapshot image attachment |
-| Recording | Auto-start/stop with min/max duration enforcement |
+| Alerts | Discord webhook with snapshot image attachment and optional video upload |
+| Recording | Auto-start/stop with min/max duration enforcement; local saving can be disabled |
 | Sound | GPIO PWM buzzer (access-denied tone on unknown) |
 | Database | SQLite with WAL mode |
 | Deployment | Gunicorn + systemd + Cloudflare Tunnel |
@@ -105,6 +105,7 @@ nano .env
 |-----|-------------|
 | `SECRET_KEY` | Generate with: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL |
+| `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
 | `SESSION_COOKIE_SECURE` | `true` if behind Cloudflare HTTPS, `false` for LAN-only HTTP |
 
 ### 5 — Initialise and run (dev)
@@ -372,7 +373,7 @@ This system is designed for use on **your own property** with people who have
 
 - All data stays on-device (no cloud processing)
 - Embeddings are 512-dimensional float vectors; they cannot reconstruct a face
-- Snapshots and recordings are stored locally only
+- Snapshots are stored locally; recordings can be stored locally or uploaded to Discord only
 - Audit log tracks who enrolled or deleted face data
 - Enrolled people can be deleted (removing images and embeddings) at any time
 

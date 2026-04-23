@@ -31,10 +31,39 @@ _last_sent: dict[int, float] = {}   # event_id → timestamp
 _cooldown_lock = threading.Lock()
 
 
+def _discord_webhook_url() -> str:
+    try:
+        from database import get_setting
+        return get_setting("discord_webhook_url", config.DISCORD_WEBHOOK_URL).strip()
+    except Exception:
+        return config.DISCORD_WEBHOOK_URL
+
+
+def _discord_cooldown_seconds() -> int:
+    try:
+        from database import get_setting
+        value = int(get_setting("discord_cooldown_seconds", str(config.DISCORD_COOLDOWN_SECONDS)))
+    except Exception:
+        return config.DISCORD_COOLDOWN_SECONDS
+    return value if value > 0 else config.DISCORD_COOLDOWN_SECONDS
+
+
+def _update_event_webhook_error(event_id: int | None, error: str) -> None:
+    if event_id is None:
+        return
+    try:
+        from database import raw_db_ctx
+        import models as m
+        with raw_db_ctx() as db:
+            m.update_event(db, event_id, webhook_error=error[:500])
+    except Exception:
+        pass
+
+
 def _is_on_cooldown(event_id: int) -> bool:
     with _cooldown_lock:
         last = _last_sent.get(event_id, 0)
-        return (time.monotonic() - last) < config.DISCORD_COOLDOWN_SECONDS
+        return (time.monotonic() - last) < _discord_cooldown_seconds()
 
 
 def _mark_sent(event_id: int) -> None:
@@ -91,6 +120,38 @@ def _build_payload(
     }
 
 
+def _build_recording_payload(
+    event_id: int | None,
+    ended_at: str,
+    recording_filename: str,
+    duration_seconds: float,
+) -> dict[str, Any]:
+    ts = ended_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        discord_ts = f"<t:{int(dt.timestamp())}:F>"
+    except ValueError:
+        discord_ts = ts
+
+    embed = {
+        "title": "Unknown recording finished",
+        "color": 0xFF9900,
+        "fields": [
+            {"name": "Event ID", "value": str(event_id or "unknown"), "inline": True},
+            {"name": "Finished", "value": discord_ts, "inline": True},
+            {"name": "Duration", "value": f"{duration_seconds:.0f}s", "inline": True},
+            {"name": "File", "value": f"`{recording_filename}`", "inline": False},
+        ],
+        "footer": {"text": "CacheSec - Discord-only recording upload"},
+        "timestamp": ts,
+    }
+
+    return {
+        "content": "Unknown-person recording uploaded.",
+        "embeds": [embed],
+    }
+
+
 def _send(
     event_id: int,
     occurred_at: str,
@@ -102,7 +163,7 @@ def _send(
     Perform the actual HTTP request. Returns True on success.
     Must be run inside a daemon thread.
     """
-    webhook_url = config.DISCORD_WEBHOOK_URL
+    webhook_url = _discord_webhook_url()
     if not webhook_url:
         logger.warning("DISCORD_WEBHOOK_URL is not set — skipping notification")
         return False
@@ -189,8 +250,68 @@ def notify_unknown(
             from database import raw_db_ctx
             import models as m
             with raw_db_ctx() as db:
-                m.update_event(db, event_id, webhook_sent=1 if success else 0)
+                fields = {"webhook_sent": 1 if success else 0}
+                if success:
+                    fields["webhook_error"] = ""
+                m.update_event(db, event_id, **fields)
         except Exception as exc:
             logger.warning("Could not update webhook_sent: %s", exc)
 
     threading.Thread(target=_task, daemon=True).start()
+
+
+def upload_recording(
+    event_id: int | None,
+    recording_path: str,
+    recording_filename: str = "",
+    duration_seconds: float = 0.0,
+    ended_at: str = "",
+) -> bool:
+    """
+    Upload a completed recording to Discord synchronously.
+
+    Used by recorder.py when local video saving is disabled. The caller remains
+    responsible for deleting the local file after this returns.
+    """
+    webhook_url = _discord_webhook_url()
+    if not webhook_url:
+        error = "DISCORD_WEBHOOK_URL is not set - recording upload skipped"
+        logger.warning(error)
+        _update_event_webhook_error(event_id, error)
+        return False
+
+    clip = Path(recording_path)
+    if not clip.is_file():
+        error = f"Recording file not found for Discord upload: {recording_path}"
+        logger.error(error)
+        _update_event_webhook_error(event_id, error)
+        return False
+
+    filename = recording_filename or clip.name
+    payload = _build_recording_payload(event_id, ended_at, filename, duration_seconds)
+    mime = "video/mp4" if clip.suffix.lower() == ".mp4" else "video/x-msvideo"
+
+    file_h = None
+    try:
+        import json as _json
+        file_h = open(clip, "rb")
+        resp = requests.post(
+            webhook_url,
+            data={"payload_json": _json.dumps(payload)},
+            files={"file": (filename, file_h, mime)},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        logger.info(
+            "Discord recording uploaded for event %s: %s (status %d)",
+            event_id, filename, resp.status_code,
+        )
+        return True
+    except requests.RequestException as exc:
+        error = f"Discord recording upload failed: {exc}"
+        logger.error("%s", error)
+        _update_event_webhook_error(event_id, error)
+        return False
+    finally:
+        if file_h:
+            file_h.close()

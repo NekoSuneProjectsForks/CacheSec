@@ -66,6 +66,7 @@ RECORDINGS_DIR: str = os.getenv("RECORDINGS_DIR", str(_BASE_DIR / "recordings"))
 SNAPSHOTS_DIR: str = os.getenv("SNAPSHOTS_DIR", str(_BASE_DIR / "snapshots"))
 MIN_RECORDING_SECONDS: int = _int("MIN_RECORDING_SECONDS", 15)
 MAX_RECORDING_SECONDS: int = _int("MAX_RECORDING_SECONDS", 5400)  # 1h30m
+SAVE_RECORDINGS_LOCALLY: bool = _bool("SAVE_RECORDINGS_LOCALLY", True)
 
 # ---------------------------------------------------------------------------
 # Discord

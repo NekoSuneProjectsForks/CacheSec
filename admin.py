@@ -172,6 +172,8 @@ def delete_recording(rec_id: int):
         flash(f"File delete error: {exc}", "warning")
 
     models.soft_delete_recording(db, rec_id, deleted_by=session["user_id"])
+    if row["event_id"]:
+        models.update_event(db, row["event_id"], recording_path="")
     audit(
         "RECORDING_DELETED",
         user_id=session["user_id"],
@@ -181,6 +183,63 @@ def delete_recording(rec_id: int):
         ip_address=get_client_ip(),
     )
     flash("Recording deleted.", "success")
+    return redirect(url_for("admin.recordings"))
+
+
+@admin_bp.route("/recordings/delete-batch", methods=["POST"])
+@admin_required
+def delete_recordings_batch():
+    raw_ids = request.form.getlist("recording_ids")
+    rec_ids: list[int] = []
+    for raw_id in raw_ids:
+        try:
+            rec_ids.append(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+
+    rec_ids = sorted(set(rec_ids))
+    if not rec_ids:
+        flash("No recordings selected.", "warning")
+        return redirect(url_for("admin.recordings"))
+
+    db = get_db()
+    deleted = 0
+    file_errors: list[str] = []
+    for rec_id in rec_ids:
+        row = db.execute(
+            "SELECT * FROM recordings WHERE id=? AND deleted=0", (rec_id,)
+        ).fetchone()
+        if not row:
+            continue
+
+        fpath = Path(config.RECORDINGS_DIR) / Path(row["filename"]).name
+        try:
+            fpath.unlink(missing_ok=True)
+        except OSError as exc:
+            file_errors.append(f"{row['filename']}: {exc}")
+
+        models.soft_delete_recording(db, rec_id, deleted_by=session["user_id"])
+        if row["event_id"]:
+            models.update_event(db, row["event_id"], recording_path="")
+        deleted += 1
+
+    if deleted:
+        audit(
+            "RECORDINGS_BATCH_DELETED",
+            user_id=session["user_id"],
+            username=session["username"],
+            target_type="recording",
+            target_id=",".join(str(i) for i in rec_ids),
+            detail=f"{deleted} recording(s) deleted",
+            ip_address=get_client_ip(),
+        )
+        flash(f"{deleted} recording(s) deleted.", "success")
+    else:
+        flash("No matching recordings were deleted.", "warning")
+
+    if file_errors:
+        flash("Some files could not be removed: " + "; ".join(file_errors[:3]), "warning")
+
     return redirect(url_for("admin.recordings"))
 
 
@@ -704,6 +763,7 @@ def settings():
         "unknown_cooldown_seconds",
         "min_recording_seconds",
         "max_recording_seconds",
+        "save_recordings_locally",
         "discord_cooldown_seconds",
         "discord_webhook_url",
         "sound_enabled",
@@ -711,9 +771,9 @@ def settings():
 
     if request.method == "POST":
         for key in _setting_keys:
-            val = request.form.get(key, "").strip()
-            if val is not None:
-                set_setting(key, val, user_id=session["user_id"])
+            values = request.form.getlist(key)
+            val = values[-1].strip() if values else ""
+            set_setting(key, val, user_id=session["user_id"])
 
         audit("SETTINGS_CHANGED", user_id=session["user_id"],
               username=session["username"], ip_address=get_client_ip())

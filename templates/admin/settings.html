@@ -56,6 +56,22 @@
                    value="{{ settings.max_recording_seconds or '5400' }}">
           </div>
 
+          <div class="col-12">
+            <input type="hidden" name="save_recordings_locally" value="false">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="save_recordings_locally"
+                     name="save_recordings_locally" value="true"
+                     {{ 'checked' if settings.save_recordings_locally != 'false' else '' }}>
+              <label class="form-check-label" for="save_recordings_locally">
+                Save completed videos locally
+              </label>
+            </div>
+            <div class="form-text text-muted">
+              Turn this off to upload finished clips to Discord only, then delete the local video file.
+              A Discord webhook URL is required or clips will be discarded after recording.
+            </div>
+          </div>
+
         </div>
 
         <div class="card-header cs-card-header border-top border-secondary">Discord Webhook</div>
@@ -67,6 +83,9 @@
                    class="form-control bg-secondary border-secondary text-light"
                    placeholder="https://discord.com/api/webhooks/..."
                    value="{{ settings.discord_webhook_url or '' }}">
+            <div class="form-text text-muted">
+              Used for instant unknown alerts and for finished video uploads when local saving is disabled.
+            </div>
           </div>
 
           <div class="col-md-6">

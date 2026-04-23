@@ -76,6 +76,9 @@ class Recorder:
         self._mp4_filename      = ""   # final .mp4 name (set at start)
         self._start_time        = 0.0
         self._last_visible_time = 0.0
+        self._min_duration      = config.MIN_RECORDING_SECONDS
+        self._max_duration      = config.MAX_RECORDING_SECONDS
+        self._save_locally      = config.SAVE_RECORDINGS_LOCALLY
 
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
@@ -161,13 +164,16 @@ class Recorder:
                 elapsed = time.monotonic() - self._start_time
                 absent  = time.monotonic() - self._last_visible_time
 
-                if elapsed >= config.MAX_RECORDING_SECONDS:
+                max_duration = max(1, self._max_duration)
+                min_duration = max(1, self._min_duration)
+
+                if elapsed >= max_duration:
                     logger.warning("Max recording duration reached — stopping")
                     self._finalise_recording()
 
                 elif (
                     not unknown_visible
-                    and elapsed >= config.MIN_RECORDING_SECONDS
+                    and elapsed >= min_duration
                     and absent  >= 3.0   # 3-second settling gap after camera signals gone
                 ):
                     logger.info("Unknown person absent %.1fs — stopping recording", absent)
@@ -188,6 +194,9 @@ class Recorder:
         ts          = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         mp4_fname   = f"unknown_{ts}.mp4"
         avi_path    = str(Path(config.RECORDINGS_DIR) / f"unknown_{ts}.avi")
+        min_duration = _int_setting("min_recording_seconds", config.MIN_RECORDING_SECONDS)
+        max_duration = _int_setting("max_recording_seconds", config.MAX_RECORDING_SECONDS)
+        save_locally = _bool_setting("save_recordings_locally", config.SAVE_RECORDINGS_LOCALLY)
 
         # MJPEG into AVI — always works with OpenCV's bundled ffmpeg
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
@@ -208,14 +217,23 @@ class Recorder:
             self._mp4_filename      = mp4_fname
             self._start_time        = time.monotonic()
             self._last_visible_time = time.monotonic()
+            self._min_duration      = min_duration
+            self._max_duration      = max_duration
+            self._save_locally      = save_locally
 
-        logger.info("Recording started (MJPEG/AVI): %s  event=%d", avi_path, event_id)
+        logger.info(
+            "Recording started (MJPEG/AVI): %s  event=%d  save_locally=%s",
+            avi_path, event_id, save_locally,
+        )
 
         started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         mp4_path   = str(Path(config.RECORDINGS_DIR) / mp4_fname)
-        self._update_event_recording(
-            event_id, recording_path=mp4_path, recording_start=started_at
-        )
+        fields = {"recording_start": started_at}
+        if save_locally:
+            fields["recording_path"] = mp4_path
+        else:
+            fields["notes"] = "Recording will be uploaded to Discord only."
+        self._update_event_recording(event_id, **fields)
 
     def _finalise_recording(self) -> None:
         with self._state_lock:
@@ -226,6 +244,7 @@ class Recorder:
             avi_path    = self._avi_path
             mp4_fname   = self._mp4_filename
             start       = self._start_time
+            save_locally = self._save_locally
             self._is_recording  = False
             self._writer        = None
             self._event_id      = None
@@ -247,7 +266,7 @@ class Recorder:
         mp4_path = str(Path(config.RECORDINGS_DIR) / mp4_fname)
         t = threading.Thread(
             target=self._reencode,
-            args=(avi_path, mp4_path, mp4_fname, event_id, duration, ended_at),
+            args=(avi_path, mp4_path, mp4_fname, event_id, duration, ended_at, save_locally),
             daemon=True,
             name="Reencoder",
         )
@@ -265,6 +284,7 @@ class Recorder:
         event_id: int | None,
         duration: float,
         ended_at: str,
+        save_locally: bool,
     ) -> None:
         """
         Re-encode the temp AVI to H.264 MP4 using system ffmpeg.
@@ -275,14 +295,18 @@ class Recorder:
             # ffmpeg not found — just rename the AVI as a fallback
             logger.warning("ffmpeg not found; keeping .avi file as-is")
             avi_fname = Path(avi_path).name
-            self._save_recording_row(
-                event_id=event_id,
-                filename=avi_fname,
-                file_size_bytes=_file_size(avi_path),
-                duration_seconds=duration,
-                started_at=ended_at,
-                ended_at=ended_at,
-            )
+            if save_locally:
+                self._save_recording_row(
+                    event_id=event_id,
+                    filename=avi_fname,
+                    file_size_bytes=_file_size(avi_path),
+                    duration_seconds=duration,
+                    started_at=ended_at,
+                    ended_at=ended_at,
+                )
+                self._update_event_recording(event_id, recording_path=avi_path)
+            else:
+                self._upload_and_discard(avi_path, avi_fname, event_id, duration, ended_at)
             return
 
         logger.info("Re-encoding %s → %s", Path(avi_path).name, Path(mp4_path).name)
@@ -310,32 +334,88 @@ class Recorder:
                     os.unlink(avi_path)
                 except OSError:
                     pass
-                self._save_recording_row(
-                    event_id=event_id,
-                    filename=mp4_fname,
-                    file_size_bytes=mp4_size,
-                    duration_seconds=duration,
-                    started_at=ended_at,
-                    ended_at=ended_at,
-                )
-                self._update_event_recording(event_id, recording_path=mp4_path)
+                if save_locally:
+                    self._save_recording_row(
+                        event_id=event_id,
+                        filename=mp4_fname,
+                        file_size_bytes=mp4_size,
+                        duration_seconds=duration,
+                        started_at=ended_at,
+                        ended_at=ended_at,
+                    )
+                    self._update_event_recording(event_id, recording_path=mp4_path)
+                else:
+                    self._upload_and_discard(mp4_path, mp4_fname, event_id, duration, ended_at)
             else:
                 logger.error("ffmpeg re-encode failed:\n%s", result.stderr[-2000:])
                 # Fall back: keep the AVI, update DB to point at it
                 avi_fname = Path(avi_path).name
-                self._save_recording_row(
-                    event_id=event_id,
-                    filename=avi_fname,
-                    file_size_bytes=_file_size(avi_path),
-                    duration_seconds=duration,
-                    started_at=ended_at,
-                    ended_at=ended_at,
-                )
-                self._update_event_recording(event_id, recording_path=avi_path)
+                if save_locally:
+                    self._save_recording_row(
+                        event_id=event_id,
+                        filename=avi_fname,
+                        file_size_bytes=_file_size(avi_path),
+                        duration_seconds=duration,
+                        started_at=ended_at,
+                        ended_at=ended_at,
+                    )
+                    self._update_event_recording(event_id, recording_path=avi_path)
+                else:
+                    _delete_quietly(mp4_path)
+                    self._upload_and_discard(avi_path, avi_fname, event_id, duration, ended_at)
         except subprocess.TimeoutExpired:
             logger.error("ffmpeg timed out re-encoding %s", avi_path)
+            if not save_locally:
+                _delete_quietly(avi_path)
+                _delete_quietly(mp4_path)
+                self._update_event_recording(
+                    event_id,
+                    webhook_error="Recording upload skipped: ffmpeg timed out.",
+                    notes="Recording was not saved locally and encoding timed out.",
+                )
         except Exception as exc:
             logger.error("Re-encode error: %s", exc)
+            if not save_locally:
+                _delete_quietly(avi_path)
+                _delete_quietly(mp4_path)
+                self._update_event_recording(
+                    event_id,
+                    webhook_error=f"Recording upload skipped: {exc}"[:500],
+                    notes="Recording was not saved locally after encoding error.",
+                )
+
+    def _upload_and_discard(
+        self,
+        path: str,
+        filename: str,
+        event_id: int | None,
+        duration: float,
+        ended_at: str,
+    ) -> None:
+        """Upload the finished clip to Discord, then remove the local file."""
+        try:
+            from discord_notify import upload_recording
+            success = upload_recording(
+                event_id=event_id,
+                recording_path=path,
+                recording_filename=filename,
+                duration_seconds=duration,
+                ended_at=ended_at,
+            )
+            note = (
+                f"Recording uploaded to Discord only: {filename}"
+                if success else
+                f"Recording was not saved locally; Discord upload failed: {filename}"
+            )
+            fields = {"notes": note}
+            if success:
+                fields["webhook_sent"] = 1
+                fields["webhook_error"] = ""
+            else:
+                fields["webhook_sent"] = 0
+            self._update_event_recording(event_id, **fields)
+        finally:
+            _delete_quietly(path)
 
     def _update_event_recording(self, event_id: int | None, **fields) -> None:
         if event_id is None:
@@ -363,6 +443,31 @@ def _file_size(path: str) -> int:
         return os.path.getsize(path)
     except OSError:
         return 0
+
+
+def _delete_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _bool_setting(key: str, default: bool) -> bool:
+    try:
+        from database import get_setting
+        value = get_setting(key, "true" if default else "false")
+    except Exception:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int_setting(key: str, default: int) -> int:
+    try:
+        from database import get_setting
+        value = int(get_setting(key, str(default)))
+    except Exception:
+        return default
+    return value if value > 0 else default
 
 
 _recorder: Recorder | None = None

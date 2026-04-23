@@ -211,6 +211,7 @@ def init_db() -> None:
             "unknown_cooldown_seconds": str(config.UNKNOWN_COOLDOWN_SECONDS),
             "min_recording_seconds":    str(config.MIN_RECORDING_SECONDS),
             "max_recording_seconds":    str(config.MAX_RECORDING_SECONDS),
+            "save_recordings_locally":  "true" if config.SAVE_RECORDINGS_LOCALLY else "false",
             "discord_cooldown_seconds": str(config.DISCORD_COOLDOWN_SECONDS),
             "sound_enabled":            "true" if config.SOUND_ENABLED else "false",
             "discord_webhook_url":      config.DISCORD_WEBHOOK_URL,
