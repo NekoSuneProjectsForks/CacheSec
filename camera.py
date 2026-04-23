@@ -248,16 +248,20 @@ class CameraLoop:
 
         _camera_status["running"] = True
         _camera_status["error"]   = ""
+        _camera_status["night_vision"] = False
         _camera_status["sls_enabled"] = config.SLS_ENABLED
         _camera_status["sls_active"] = False
         _camera_status["depth"] = False
 
-        # ---- Try Kinect first, fall back to webcam ----
+        # ---- Open preferred source, with fallback ----
         from kinect import get_kinect, kinect_available, KinectLED
         kinect = get_kinect()
-        use_kinect = config.KINECT_ENABLED and kinect_available()
+        use_kinect = False
+        cap = None
 
-        if use_kinect:
+        def start_kinect_source() -> bool:
+            if not (config.KINECT_ENABLED and kinect_available()):
+                return False
             if kinect.start():
                 _camera_status["source"] = "kinect"
                 if config.KINECT_TILT != 0:
@@ -287,18 +291,33 @@ class CameraLoop:
                             kinect.set_led(KinectLED.GREEN)
                     else:
                         kinect.set_led(KinectLED.GREEN)
+                return True
             else:
                 logger.warning("Kinect detected but failed to start: %s — falling back to webcam",
                                kinect.error)
-                use_kinect = False
+                return False
 
-        if not use_kinect:
+        if config.CAMERA_PREFERRED_SOURCE == "webcam":
             _camera_status["source"] = "webcam"
             cap = self.__try_open()
             if cap is None:
-                _camera_status["running"] = False
-                recorder.stop_background()
-                return
+                logger.warning("Preferred webcam unavailable — trying Kinect fallback")
+                use_kinect = start_kinect_source()
+                _camera_status["error"] = "" if use_kinect else _camera_status["error"]
+            else:
+                logger.info("Using webcam as camera source")
+        else:
+            use_kinect = start_kinect_source()
+            if not use_kinect:
+                _camera_status["source"] = "webcam"
+                cap = self.__try_open()
+                if cap is not None:
+                    logger.info("Using webcam as camera source")
+
+        if cap is None and not use_kinect:
+            _camera_status["running"] = False
+            recorder.stop_background()
+            return
 
         try:
             while not self._stop_flag.is_set():

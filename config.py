@@ -55,6 +55,9 @@ CAMERA_INDEX: int = _int("CAMERA_INDEX", 0)
 FRAME_WIDTH: int = _int("FRAME_WIDTH", 640)
 FRAME_HEIGHT: int = _int("FRAME_HEIGHT", 480)
 UNKNOWN_COOLDOWN_SECONDS: int = _int("UNKNOWN_COOLDOWN_SECONDS", 10)
+CAMERA_PREFERRED_SOURCE: str = os.getenv("CAMERA_PREFERRED_SOURCE", "webcam").strip().lower()
+if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect"}:
+    CAMERA_PREFERRED_SOURCE = "webcam"
 
 # ---------------------------------------------------------------------------
 # Recording
