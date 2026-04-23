@@ -60,10 +60,11 @@
             <textarea name="ip_camera_urls"
                       class="form-control bg-secondary border-secondary text-light"
                       rows="4"
-                      placeholder="Front Door|rtsp://user:pass@192.168.1.51:554/stream1&#10;Garage|https://camera.example.com/live.m3u8">{{ settings.ip_camera_urls or '' }}</textarea>
+                      placeholder="Front Door|rtsp://user:pass@192.168.1.51:554/stream1&#10;Beach|https://camera.example.com/live.m3u8|referer=https://camera.example.com">{{ settings.ip_camera_urls or '' }}</textarea>
             <div class="form-text text-muted">
               Optional live-view cameras, one per line or comma-separated. Supports RTSP,
-              HLS .m3u8, MJPEG/HTTP video, and periodic image snapshot URLs.
+              HLS .m3u8, MJPEG/HTTP video, and periodic image snapshot URLs. You can append
+              |referer=..., |origin=..., or |user_agent=... for sites that block plain requests.
             </div>
           </div>
 

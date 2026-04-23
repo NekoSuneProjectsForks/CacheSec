@@ -122,7 +122,14 @@ def get_live_sources() -> list[dict]:
 class FFmpegFrameCapture:
     """Minimal VideoCapture-like wrapper for HLS streams via system ffmpeg."""
 
-    def __init__(self, url: str, width: int, height: int, fps: int = 15):
+    def __init__(
+        self,
+        url: str,
+        width: int,
+        height: int,
+        fps: int = 15,
+        http_options: dict[str, str] | None = None,
+    ):
         self.url = url
         self.width = width
         self.height = height
@@ -151,6 +158,9 @@ class FFmpegFrameCapture:
             "-reconnect", "1",
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "2",
+        ]
+        cmd += _ffmpeg_http_input_args(url, http_options)
+        cmd += [
             "-i", url,
             "-an",
             "-vf", vf,
@@ -853,31 +863,64 @@ def _live_camera_preferred_source() -> str:
     return source if source in {"webcam", "ip", "kinect"} else "webcam"
 
 
-def _configured_ip_sources(include_primary: bool | None = None) -> list[dict[str, str]]:
-    entries: list[dict[str, str]] = []
+def _configured_ip_sources(include_primary: bool | None = None) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
     if include_primary is None:
         include_primary = _live_camera_preferred_source() != "ip"
 
     primary = _normalize_camera_url(_live_setting("ip_camera_url", config.IP_CAMERA_URL))
     if include_primary and _is_supported_camera_url(primary):
-        entries.append({"label": "Primary IP Camera", "url": primary})
+        entries.append({"label": "Primary IP Camera", "url": primary, "options": {}})
 
     raw = _live_setting("ip_camera_urls", config.IP_CAMERA_URLS)
     for chunk in raw.replace(",", "\n").splitlines():
         item = chunk.strip()
         if not item or item.startswith("#"):
             continue
-        if "|" in item:
-            label, url = item.split("|", 1)
-            label = label.strip() or f"IP Camera {len(entries) + 1}"
-            url = url.strip()
-        else:
-            label = f"IP Camera {len(entries) + 1}"
-            url = item
-        url = _normalize_camera_url(url)
-        if _is_supported_camera_url(url):
-            entries.append({"label": label, "url": url})
+        parsed = _parse_camera_source_entry(item, len(entries) + 1)
+        if parsed:
+            entries.append(parsed)
     return entries
+
+
+def _parse_camera_source_entry(item: str, index: int) -> dict[str, object] | None:
+    parts = [part.strip() for part in item.split("|") if part.strip()]
+    if not parts:
+        return None
+
+    options_start = len(parts)
+    for idx, part in enumerate(parts):
+        if "=" in part:
+            options_start = idx
+            break
+    main_parts = parts[:options_start]
+    option_parts = parts[options_start:]
+
+    label = f"IP Camera {index}"
+    url = ""
+    if main_parts:
+        first = _normalize_camera_url(main_parts[0])
+        if _is_supported_camera_url(first):
+            url = first
+        else:
+            label = main_parts[0]
+            if len(main_parts) >= 2:
+                url = _normalize_camera_url(main_parts[1])
+
+    if not _is_supported_camera_url(url):
+        return None
+
+    options: dict[str, str] = {}
+    for opt in option_parts:
+        key, _, value = opt.partition("=")
+        key = key.strip().lower().replace("-", "_")
+        value = value.strip()
+        if not value:
+            continue
+        if key in {"referer", "origin", "user_agent"}:
+            options[key] = value
+
+    return {"label": label, "url": url, "options": options}
 
 
 def _normalize_camera_url(raw: str) -> str:
@@ -917,6 +960,58 @@ def _looks_like_hls_url(url: str) -> bool:
     return path.endswith((".m3u8", ".m3u"))
 
 
+def _default_http_camera_user_agent() -> str:
+    return (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/135.0.0.0 Safari/537.36"
+    )
+
+
+def _default_http_camera_options(url: str) -> dict[str, str]:
+    options = {"user_agent": _default_http_camera_user_agent()}
+    host = urlsplit(url).netloc.lower()
+    if "surfline" in host:
+        options["referer"] = "https://www.surfline.com/"
+        options["origin"] = "https://www.surfline.com"
+    return options
+
+
+def _http_camera_options(
+    url: str,
+    overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    options = _default_http_camera_options(url)
+    if overrides:
+        for key, value in overrides.items():
+            if value:
+                options[key] = value
+    return options
+
+
+def _ffmpeg_http_input_args(
+    url: str,
+    overrides: dict[str, str] | None = None,
+) -> list[str]:
+    if not url.lower().startswith(("http://", "https://")):
+        return []
+    options = _http_camera_options(url, overrides)
+    args: list[str] = []
+    user_agent = options.get("user_agent", "").strip()
+    if user_agent:
+        args += ["-user_agent", user_agent]
+    header_lines: list[str] = []
+    referer = options.get("referer", "").strip()
+    origin = options.get("origin", "").strip()
+    if referer:
+        header_lines.append(f"Referer: {referer}")
+    if origin:
+        header_lines.append(f"Origin: {origin}")
+    if header_lines:
+        args += ["-headers", "\r\n".join(header_lines) + "\r\n"]
+    return args
+
+
 def _prime_capture(cap: CaptureHandle, attempts: int = 10) -> bool:
     for _ in range(max(1, attempts)):
         ok, frame = cap.read()
@@ -926,12 +1021,17 @@ def _prime_capture(cap: CaptureHandle, attempts: int = 10) -> bool:
     return False
 
 
-def _open_hls_capture(url: str, label: str) -> FFmpegFrameCapture | None:
+def _open_hls_capture(
+    url: str,
+    label: str,
+    http_options: dict[str, str] | None = None,
+) -> FFmpegFrameCapture | None:
     cap = FFmpegFrameCapture(
         url,
         width=config.FRAME_WIDTH,
         height=config.FRAME_HEIGHT,
         fps=15,
+        http_options=http_options,
     )
     if not cap.isOpened():
         cap.release()
@@ -939,7 +1039,12 @@ def _open_hls_capture(url: str, label: str) -> FFmpegFrameCapture | None:
         return None
     if not _prime_capture(cap, attempts=5):
         cap.release()
-        logger.warning("ffmpeg HLS produced no frames for %s: %s", label, _redact_url(url))
+        logger.warning(
+            "ffmpeg HLS produced no frames for %s: %s. "
+            "If this is a web player feed, try referer/origin headers in IP_CAMERA_URLS.",
+            label,
+            _redact_url(url),
+        )
         return None
     logger.info("Opened HLS stream via ffmpeg for %s: %s", label, _redact_url(url))
     return cap
@@ -949,6 +1054,7 @@ def _open_stream_capture(
     url: str,
     label: str,
     transport: str | None = None,
+    http_options: dict[str, str] | None = None,
 ) -> CaptureHandle | None:
     url = _normalize_camera_url(url)
     if not _is_supported_camera_url(url):
@@ -957,9 +1063,7 @@ def _open_stream_capture(
     # Prefer system ffmpeg for HLS playlists because OpenCV network support
     # varies a lot between builds, while ffmpeg handles .m3u8 reliably.
     if _looks_like_hls_url(url):
-        hls_cap = _open_hls_capture(url, label)
-        if hls_cap is not None:
-            return hls_cap
+        return _open_hls_capture(url, label, http_options=http_options)
 
     _set_ffmpeg_capture_options(url, transport)
     cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
@@ -1236,27 +1340,40 @@ def generate_mjpeg(source_id: str = "primary"):
             idx = -1
         sources = _configured_ip_sources()
         if 0 <= idx < len(sources):
-            yield from _generate_ip_mjpeg(sources[idx]["url"], sources[idx]["label"])
+            source = sources[idx]
+            yield from _generate_ip_mjpeg(
+                source["url"],
+                source["label"],
+                http_options=source.get("options"),
+            )
             return
 
     yield from _generate_error_mjpeg()
 
 
-def _generate_ip_mjpeg(url: str, label: str):
+def _generate_ip_mjpeg(
+    url: str,
+    label: str,
+    http_options: dict[str, str] | None = None,
+):
     if _looks_like_snapshot_url(url):
-        yield from _generate_snapshot_mjpeg(url, label)
+        yield from _generate_snapshot_mjpeg(url, label, http_options=http_options)
         return
-    yield from _generate_capture_mjpeg(url, label=label)
+    yield from _generate_capture_mjpeg(url, label=label, http_options=http_options)
 
 
-def _generate_capture_mjpeg(source, label: str = "camera"):
+def _generate_capture_mjpeg(
+    source,
+    label: str = "camera",
+    http_options: dict[str, str] | None = None,
+):
     if isinstance(source, str):
         source = _normalize_camera_url(source)
         if not _is_supported_camera_url(source):
             logger.warning("Live feed has unsupported URL for %s: %s", label, _redact_url(source))
             yield from _generate_error_mjpeg()
             return
-        cap = _open_stream_capture(source, label)
+        cap = _open_stream_capture(source, label, http_options=http_options)
     else:
         cap = cv2.VideoCapture(source)
         if cap.isOpened():
@@ -1282,10 +1399,20 @@ def _generate_capture_mjpeg(source, label: str = "camera"):
         cap.release()
 
 
-def _generate_snapshot_mjpeg(url: str, label: str):
+def _generate_snapshot_mjpeg(
+    url: str,
+    label: str,
+    http_options: dict[str, str] | None = None,
+):
     while True:
         try:
-            req = Request(url, headers={"User-Agent": "CacheSec/1.0"})
+            options = _http_camera_options(url, http_options)
+            headers = {"User-Agent": options.get("user_agent", "CacheSec/1.0")}
+            if options.get("referer"):
+                headers["Referer"] = options["referer"]
+            if options.get("origin"):
+                headers["Origin"] = options["origin"]
+            req = Request(url, headers=headers)
             with urlopen(req, timeout=5) as resp:
                 data = resp.read()
             arr = np.frombuffer(data, dtype=np.uint8)
