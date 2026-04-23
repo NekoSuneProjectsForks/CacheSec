@@ -595,6 +595,20 @@ def _frame_wall_duration(
     return round(span + avg_interval, 3)
 
 
+def _is_stream_url(value: str) -> bool:
+    value = value.strip().lower()
+    return value.startswith(("rtsp://", "rtsps://", "http://", "https://"))
+
+
+def _runtime_setting(key: str, default: str = "") -> str:
+    try:
+        from database import get_setting
+        value = get_setting(key, default)
+    except Exception:
+        return default
+    return value if value is not None else default
+
+
 def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]:
     if not audio_path:
         return None, ""
@@ -641,6 +655,28 @@ def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]
 
 
 def _audio_capture_commands(ffmpeg: str, source: str, audio_path: str) -> list[tuple[str, list[str]]]:
+    if _is_stream_url(source):
+        cmd = [
+            ffmpeg, "-y",
+            "-hide_banner",
+            "-loglevel", "warning",
+        ]
+        if source.lower().startswith("rtsp://"):
+            transport = _runtime_setting("ip_camera_rtsp_transport", config.IP_CAMERA_RTSP_TRANSPORT)
+            transport = transport.strip().lower()
+            if transport not in {"tcp", "udp", "udp_multicast", "http"}:
+                transport = "tcp"
+            cmd += ["-rtsp_transport", transport]
+        cmd += [
+            "-i", source,
+            "-vn",
+            "-c:a", "pcm_s16le",
+            "-ac", "1",
+            "-ar", "48000",
+            audio_path,
+        ]
+        return [("ip-camera-audio", cmd)]
+
     base = [
         ffmpeg, "-y",
         "-hide_banner",
@@ -698,6 +734,13 @@ def _audio_input_source() -> str:
     override = config.RECORD_AUDIO_DEVICE.strip()
     if override and override.lower() != "auto":
         return override
+
+    camera_source = _runtime_setting("camera_preferred_source", config.CAMERA_PREFERRED_SOURCE)
+    if camera_source.strip().lower() == "ip":
+        ip_url = _runtime_setting("ip_camera_url", config.IP_CAMERA_URL).strip()
+        if ip_url:
+            return ip_url
+
     detected = _detect_alsa_audio_source()
     return detected or "default"
 

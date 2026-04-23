@@ -74,6 +74,8 @@
         {% endif %}
         {% if cam_status.source == 'kinect' %}
           <span class="badge bg-info"><i class="bi bi-gpu-card me-1"></i>Kinect</span>
+        {% elif cam_status.source == 'ip' %}
+          <span class="badge bg-primary"><i class="bi bi-router-fill me-1"></i>IP Camera</span>
         {% else %}
           <span class="badge bg-secondary"><i class="bi bi-webcam me-1"></i>Webcam</span>
         {% endif %}

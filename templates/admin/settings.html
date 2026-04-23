@@ -31,6 +31,43 @@
           </div>
 
           <div class="col-md-6">
+            <label class="form-label">Camera Source</label>
+            <select name="camera_preferred_source"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set source = settings.camera_preferred_source or 'webcam' %}
+              <option value="webcam" {{ 'selected' if source == 'webcam' else '' }}>USB / Pi Camera</option>
+              <option value="ip" {{ 'selected' if source == 'ip' else '' }}>IP Camera / RTSP</option>
+              <option value="kinect" {{ 'selected' if source == 'kinect' else '' }}>Kinect</option>
+            </select>
+            <div class="form-text text-muted">
+              Restart CacheSec after changing camera source settings.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">IP Camera URL</label>
+            <input type="url" name="ip_camera_url"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="rtsp://user:pass@192.168.1.50:554/stream1"
+                   value="{{ settings.ip_camera_url or '' }}">
+            <div class="form-text text-muted">
+              Supports RTSP, HTTP MJPEG, and HTTP video URLs that OpenCV/ffmpeg can open.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">IP Camera RTSP Transport</label>
+            <select name="ip_camera_rtsp_transport"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set transport = settings.ip_camera_rtsp_transport or 'tcp' %}
+              <option value="tcp" {{ 'selected' if transport == 'tcp' else '' }}>TCP (recommended Wi-Fi)</option>
+              <option value="udp" {{ 'selected' if transport == 'udp' else '' }}>UDP</option>
+              <option value="udp_multicast" {{ 'selected' if transport == 'udp_multicast' else '' }}>UDP multicast</option>
+              <option value="http" {{ 'selected' if transport == 'http' else '' }}>HTTP tunnel</option>
+            </select>
+          </div>
+
+          <div class="col-md-6">
             <label class="form-label">Unknown Cooldown (seconds)</label>
             <input type="number" step="1" min="1" max="120" name="unknown_cooldown_seconds"
                    class="form-control bg-secondary border-secondary text-light"
@@ -83,8 +120,8 @@
               </label>
             </div>
             <div class="form-text text-muted">
-              Off by default. When enabled, CacheSec tries the detected Xbox 360 Kinect,
-              webcam, or USB microphone and falls back to silent video if audio is unavailable.
+              Off by default. When enabled, CacheSec tries IP-camera audio for IP sources,
+              then detected Kinect, webcam, or USB microphones.
             </div>
           </div>
 

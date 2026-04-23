@@ -103,7 +103,8 @@
       .then(function (d) {
         if (d.camera_running) {
           camBadge.className = 'badge bg-success';
-          camLabel.textContent = d.night_vision ? 'NV' : 'Live';
+          const source = d.camera_source === 'ip' ? 'IP' : (d.camera_source === 'kinect' ? 'Kinect' : 'Live');
+          camLabel.textContent = d.night_vision ? source + ' NV' : source;
         } else {
           camBadge.className = 'badge bg-danger';
           camLabel.textContent = d.camera_error || 'Offline';

@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import cv2
 import numpy as np
@@ -48,7 +50,7 @@ _camera_status      = {
     "running":      False,
     "error":        "",
     "night_vision": False,
-    "source":       "webcam",   # "webcam" or "kinect"
+    "source":       "webcam",   # "webcam", "ip", or "kinect"
     "sls_enabled":  config.SLS_ENABLED,
     "sls_active":   False,
     "depth":        False,
@@ -235,6 +237,53 @@ class CameraLoop:
                     idx, config.FRAME_WIDTH, config.FRAME_HEIGHT, exp, gain)
         return cap
 
+    def _open_ip_camera(self) -> cv2.VideoCapture | None:
+        url = _live_setting("ip_camera_url", config.IP_CAMERA_URL).strip()
+        if not url:
+            logger.error("IP camera source selected but IP_CAMERA_URL is empty")
+            _camera_status["error"] = "IP camera URL is not configured"
+            return None
+
+        transport = _live_setting(
+            "ip_camera_rtsp_transport", config.IP_CAMERA_RTSP_TRANSPORT
+        ).strip().lower()
+        if transport not in {"tcp", "udp", "udp_multicast", "http"}:
+            transport = "tcp"
+
+        # OpenCV forwards these options to its ffmpeg backend. TCP is generally
+        # more reliable for wireless RTSP cameras; nobuffer keeps latency down.
+        if url.lower().startswith("rtsp://"):
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                f"rtsp_transport;{transport}|fflags;nobuffer|max_delay;500000|stimeout;5000000"
+            )
+
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            cap.release()
+            logger.error("Cannot open IP camera stream: %s", _redact_url(url))
+            _camera_status["error"] = "IP camera unavailable"
+            return None
+
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+
+        # Pull a few packets so bad credentials/offline streams fail early.
+        ok = False
+        for _ in range(10):
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                break
+            time.sleep(0.1)
+        if not ok:
+            cap.release()
+            logger.error("IP camera opened but produced no frames: %s", _redact_url(url))
+            _camera_status["error"] = "IP camera produced no frames"
+            return None
+
+        logger.info("IP camera opened: %s", _redact_url(url))
+        return cap
+
     def _run(self) -> None:
         global _night_vision_active
 
@@ -258,6 +307,13 @@ class CameraLoop:
         kinect = get_kinect()
         use_kinect = False
         cap = None
+        preferred_source = _live_camera_preferred_source()
+
+        def primary_source_label() -> str:
+            return "ip" if preferred_source == "ip" else "webcam"
+
+        def try_open_primary_source() -> cv2.VideoCapture | None:
+            return self.__try_open_primary(preferred_source)
 
         def start_kinect_source() -> bool:
             global _night_vision_active
@@ -318,7 +374,7 @@ class CameraLoop:
 
         def switch_to_webcam_day(gray_mean: float):
             global _night_vision_active
-            new_cap = self.__try_open()
+            new_cap = try_open_primary_source()
             if new_cap is None:
                 return None
             try:
@@ -329,19 +385,22 @@ class CameraLoop:
             _camera_status["night_vision"] = False
             _camera_status["sls_active"] = False
             _camera_status["depth"] = False
-            _camera_status["source"] = "webcam"
-            logger.info("Kinect bright (brightness=%.1f) - switched back to main camera", gray_mean)
+            _camera_status["source"] = primary_source_label()
+            logger.info(
+                "Kinect bright (brightness=%.1f) - switched back to %s camera",
+                gray_mean, primary_source_label(),
+            )
             return new_cap
 
-        if config.CAMERA_PREFERRED_SOURCE == "webcam":
-            _camera_status["source"] = "webcam"
-            cap = self.__try_open()
+        if preferred_source in {"webcam", "ip"}:
+            _camera_status["source"] = primary_source_label()
+            cap = try_open_primary_source()
             if cap is None:
                 logger.warning("Preferred webcam unavailable — trying Kinect fallback")
                 use_kinect = start_kinect_source()
                 _camera_status["error"] = "" if use_kinect else _camera_status["error"]
             else:
-                logger.info("Using webcam as camera source")
+                logger.info("Using %s as camera source", primary_source_label())
         else:
             use_kinect = start_kinect_source()
             if not use_kinect:
@@ -371,7 +430,7 @@ class CameraLoop:
                         _camera_status["error"] = "Camera disconnected"
                         cap.release()
                         time.sleep(reconnect_wait)
-                        cap = self.__try_open()
+                        cap = try_open_primary_source()
                         if cap is None:
                             time.sleep(reconnect_wait)
                             continue
@@ -407,7 +466,7 @@ class CameraLoop:
                                 logger.info("Kinect → IR mode (brightness=%.1f)", gray_mean)
                             elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
                                 if (
-                                    config.CAMERA_PREFERRED_SOURCE == "webcam"
+                                    preferred_source in {"webcam", "ip"}
                                     and config.KINECT_NIGHT_VISION_ENABLED
                                 ):
                                     new_cap = switch_to_webcam_day(gray_mean)
@@ -621,10 +680,50 @@ class CameraLoop:
         _camera_status["error"] = "Camera unavailable"
         return None
 
+    def __try_open_primary(self, preferred_source: str) -> cv2.VideoCapture | None:
+        if preferred_source == "ip":
+            for attempt in range(5):
+                if self._stop_flag.is_set():
+                    return None
+                cap = self._open_ip_camera()
+                if cap:
+                    return cap
+                logger.info("Retrying IP camera open (attempt %d/5)", attempt + 1)
+                time.sleep(2)
+            _camera_status["error"] = "IP camera unavailable"
+            return None
+        return self.__try_open()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _live_setting(key: str, default: str = "") -> str:
+    try:
+        from database import get_setting
+        value = get_setting(key, default)
+    except Exception:
+        return default
+    return value if value is not None else default
+
+
+def _live_camera_preferred_source() -> str:
+    source = _live_setting("camera_preferred_source", config.CAMERA_PREFERRED_SOURCE)
+    source = source.strip().lower()
+    return source if source in {"webcam", "ip", "kinect"} else "webcam"
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+        if "@" not in parts.netloc:
+            return url
+        host = parts.netloc.rsplit("@", 1)[-1]
+        return urlunsplit((parts.scheme, f"***:***@{host}", parts.path, parts.query, parts.fragment))
+    except Exception:
+        return "<invalid-url>"
+
 
 def _check_mask(face_crop: np.ndarray) -> tuple[bool, str]:
     """

@@ -760,6 +760,9 @@ def settings():
     _setting_keys = [
         "recognition_threshold",
         "frame_skip",
+        "camera_preferred_source",
+        "ip_camera_url",
+        "ip_camera_rtsp_transport",
         "unknown_cooldown_seconds",
         "min_recording_seconds",
         "max_recording_seconds",

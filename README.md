@@ -106,8 +106,10 @@ nano .env
 | `SECRET_KEY` | Generate with: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL |
 | `DISCORD_MENTION_EVERYONE` | Set `true` to include `@everyone` in unknown Discord alerts; defaults to `false` |
+| `CAMERA_PREFERRED_SOURCE` | Use `webcam`, `kinect`, or `ip` |
+| `IP_CAMERA_URL` | RTSP/HTTP/MJPEG stream URL when using an IP camera |
 | `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
-| `RECORD_AUDIO_ENABLED` | Optional microphone capture for recordings; defaults to `false` |
+| `RECORD_AUDIO_ENABLED` | Optional microphone/IP-camera audio capture for recordings; defaults to `false` |
 | `SESSION_COOKIE_SECURE` | `true` if behind Cloudflare HTTPS, `false` for LAN-only HTTP |
 
 ### 5 — Initialise and run (dev)

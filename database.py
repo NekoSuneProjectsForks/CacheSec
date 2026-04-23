@@ -208,6 +208,9 @@ def init_db() -> None:
         _default_settings = {
             "recognition_threshold":    str(config.RECOGNITION_THRESHOLD),
             "frame_skip":               str(config.FRAME_SKIP),
+            "camera_preferred_source":  config.CAMERA_PREFERRED_SOURCE,
+            "ip_camera_url":            config.IP_CAMERA_URL,
+            "ip_camera_rtsp_transport": config.IP_CAMERA_RTSP_TRANSPORT,
             "unknown_cooldown_seconds": str(config.UNKNOWN_COOLDOWN_SECONDS),
             "min_recording_seconds":    str(config.MIN_RECORDING_SECONDS),
             "max_recording_seconds":    str(config.MAX_RECORDING_SECONDS),
