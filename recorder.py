@@ -510,34 +510,71 @@ def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]
         logger.warning("Audio recording requested but no microphone was detected")
         return None, ""
 
-    cmd = [
+    for candidate in _audio_capture_commands(ffmpeg, source, audio_path):
+        label = candidate[0]
+        cmd = candidate[1]
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            time.sleep(0.5)
+            if process.poll() is None:
+                logger.info("Audio capture started from input %s (%s)", source, label)
+                return process, f"{source} {label}"
+
+            stderr = ""
+            if process.stderr:
+                stderr = process.stderr.read()[-500:].strip()
+            _delete_quietly(audio_path)
+            logger.warning(
+                "Audio capture attempt failed for %s (%s): %s",
+                source, label, stderr or f"exit={process.returncode}",
+            )
+        except Exception as exc:
+            _delete_quietly(audio_path)
+            logger.warning("Audio capture attempt could not start for %s (%s): %s", source, label, exc)
+
+    return None, ""
+
+
+def _audio_capture_commands(ffmpeg: str, source: str, audio_path: str) -> list[tuple[str, list[str]]]:
+    base = [
         ffmpeg, "-y",
         "-hide_banner",
-        "-loglevel", "error",
+        "-loglevel", "warning",
         "-f", "alsa",
         "-thread_queue_size", "512",
-        "-i", source,
-        "-c:a", "copy",
-        audio_path,
     ]
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(0.25)
-        if process.poll() is not None:
-            _delete_quietly(audio_path)
-            logger.warning("Audio capture failed to start from input %s", source)
-            return None, ""
-        logger.info("Audio capture started from input %s", source)
-        return process, source
-    except Exception as exc:
-        _delete_quietly(audio_path)
-        logger.warning("Audio capture could not start: %s", exc)
-        return None, ""
+    sources = [source]
+    if source.startswith("hw:"):
+        sources.insert(0, "plughw:" + source[3:])
+
+    commands: list[tuple[str, list[str]]] = []
+    for src in sources:
+        commands.append((
+            "kinect-native-s32-4ch",
+            base + [
+                "-ac", "4",
+                "-ar", "16000",
+                "-sample_fmt", "s32",
+                "-i", src,
+                "-c:a", "pcm_s32le",
+                audio_path,
+            ],
+        ))
+        commands.append((
+            "alsa-default",
+            base + [
+                "-i", src,
+                "-c:a", "pcm_s32le",
+                audio_path,
+            ],
+        ))
+    return commands
 
 
 def _stop_audio_capture(process: subprocess.Popen) -> None:

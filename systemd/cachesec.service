@@ -42,7 +42,7 @@ ProtectSystem=full
 ReadWritePaths=/home/cache/cachesec
 
 # Give GPIO access (needed for buzzer — requires 'gpio' group membership)
-SupplementaryGroups=gpio video
+SupplementaryGroups=gpio video audio
 
 # Process limits
 LimitNOFILE=65536

@@ -188,6 +188,7 @@ The service user needs to be in the `gpio` group:
 
 ```bash
 sudo usermod -aG gpio cache
+sudo usermod -aG audio cache   # required if recording microphone audio
 # Log out and back in, or restart the service
 ```
 
