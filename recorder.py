@@ -85,6 +85,8 @@ class Recorder:
         self._audio_process: subprocess.Popen | None = None
         self._frame_count       = 0
         self._avi_fps           = 15.0
+        self._first_frame_time  = 0.0
+        self._last_frame_time   = 0.0
 
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
@@ -163,8 +165,27 @@ class Recorder:
                 try:
                     frame = self._frame_q.get(timeout=0.05)
                     if self._writer and frame is not None:
+                        if (
+                            self._record_audio
+                            and self._audio_path
+                            and self._audio_process is None
+                            and self._frame_count == 0
+                        ):
+                            audio_process, audio_source = _start_audio_capture(self._audio_path)
+                            with self._state_lock:
+                                if audio_process:
+                                    self._audio_process = audio_process
+                                    logger.info("Audio synced to first video frame: %s", audio_source)
+                                else:
+                                    self._record_audio = False
+                                    self._audio_path = ""
+                                    logger.warning("Audio disabled for this recording; capture did not start")
+                        now = time.monotonic()
+                        if self._frame_count == 0:
+                            self._first_frame_time = now
                         self._writer.write(frame)
                         self._frame_count += 1
+                        self._last_frame_time = now
                 except queue.Empty:
                     pass
 
@@ -219,11 +240,6 @@ class Recorder:
             _delete_quietly(audio_path)
             return
 
-        audio_process = None
-        audio_source = ""
-        if record_audio:
-            audio_process, audio_source = _start_audio_capture(audio_path)
-
         with self._state_lock:
             self._is_recording      = True
             self._event_id          = event_id
@@ -236,14 +252,16 @@ class Recorder:
             self._max_duration      = max_duration
             self._save_locally      = save_locally
             self._record_audio      = record_audio
-            self._audio_path        = audio_path if audio_process else ""
-            self._audio_process     = audio_process
+            self._audio_path        = audio_path
+            self._audio_process     = None
             self._frame_count       = 0
             self._avi_fps           = fps
+            self._first_frame_time  = 0.0
+            self._last_frame_time   = 0.0
 
         logger.info(
             "Recording started (MJPEG/AVI): %s  event=%d  save_locally=%s  audio=%s",
-            avi_path, event_id, save_locally, audio_source or "off",
+            avi_path, event_id, save_locally, "pending" if record_audio else "off",
         )
 
         started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -254,8 +272,6 @@ class Recorder:
             fields["recording_path"] = mp4_path
         else:
             notes.append("Recording will be uploaded to Discord only.")
-        if record_audio and not audio_process:
-            notes.append("Audio recording requested but no microphone was available.")
         if notes:
             fields["notes"] = " ".join(notes)
         self._update_event_recording(event_id, **fields)
@@ -274,6 +290,8 @@ class Recorder:
             audio_process = self._audio_process
             frame_count = self._frame_count
             avi_fps     = self._avi_fps
+            first_frame_time = self._first_frame_time
+            last_frame_time = self._last_frame_time
             self._is_recording  = False
             self._writer        = None
             self._event_id      = None
@@ -282,6 +300,16 @@ class Recorder:
             self._audio_path    = ""
             self._audio_process = None
             self._frame_count   = 0
+            self._first_frame_time = 0.0
+            self._last_frame_time = 0.0
+
+        elapsed_duration = round(time.monotonic() - start, 3)
+        frame_duration = _frame_wall_duration(
+            frame_count, first_frame_time, last_frame_time, avi_fps
+        )
+        duration = frame_duration or elapsed_duration
+        if elapsed_duration > 0:
+            duration = min(duration, elapsed_duration)
 
         if writer:
             writer.release()
@@ -291,7 +319,6 @@ class Recorder:
             _delete_quietly(audio_path)
             audio_path = ""
 
-        duration = round(time.monotonic() - start, 1)
         ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         logger.info("Raw recording closed: %s  duration=%.1fs", avi_path, duration)
@@ -548,6 +575,26 @@ def _timeline_video_filter(frame_count: int, duration: float, avi_fps: float) ->
     return f"setpts={factor:.8f}*PTS,fps={output_fps}"
 
 
+def _frame_wall_duration(
+    frame_count: int,
+    first_frame_time: float,
+    last_frame_time: float,
+    avi_fps: float,
+) -> float:
+    if frame_count <= 0 or first_frame_time <= 0 or last_frame_time <= 0:
+        return 0.0
+
+    fallback_interval = 1.0 / avi_fps if avi_fps > 0 else 0.066
+    if frame_count == 1:
+        return round(fallback_interval, 3)
+
+    span = max(0.0, last_frame_time - first_frame_time)
+    avg_interval = span / max(frame_count - 1, 1)
+    if avg_interval <= 0:
+        avg_interval = fallback_interval
+    return round(span + avg_interval, 3)
+
+
 def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]:
     if not audio_path:
         return None, ""
@@ -573,7 +620,7 @@ def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            time.sleep(0.5)
+            time.sleep(0.1)
             if process.poll() is None:
                 logger.info("Audio capture started from input %s (%s)", source, label)
                 return process, f"{source} {label}"

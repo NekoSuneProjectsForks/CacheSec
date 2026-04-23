@@ -468,8 +468,9 @@ class CameraLoop:
 
                     display_frame = _apply_night_vision(frame) if _night_vision_active else frame
 
-                # Always push raw frame to recorder
-                recorder.push_frame(frame.copy())
+                # Record the operator-visible image: normal frames in daylight,
+                # night-vision/SLS-enhanced frames when those modes are active.
+                recorder.push_frame(display_frame.copy())
 
                 # Run detection every FRAME_SKIP frames
                 if frame_count % max(1, config.FRAME_SKIP) != 0:
