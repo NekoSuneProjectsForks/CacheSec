@@ -212,7 +212,9 @@ def init_db() -> None:
             "min_recording_seconds":    str(config.MIN_RECORDING_SECONDS),
             "max_recording_seconds":    str(config.MAX_RECORDING_SECONDS),
             "save_recordings_locally":  "true" if config.SAVE_RECORDINGS_LOCALLY else "false",
+            "record_audio_enabled":     "true" if config.RECORD_AUDIO_ENABLED else "false",
             "discord_cooldown_seconds": str(config.DISCORD_COOLDOWN_SECONDS),
+            "discord_mention_everyone": "true" if config.DISCORD_MENTION_EVERYONE else "false",
             "sound_enabled":            "true" if config.SOUND_ENABLED else "false",
             "discord_webhook_url":      config.DISCORD_WEBHOOK_URL,
         }

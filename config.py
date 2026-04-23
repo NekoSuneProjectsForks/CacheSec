@@ -67,12 +67,15 @@ SNAPSHOTS_DIR: str = os.getenv("SNAPSHOTS_DIR", str(_BASE_DIR / "snapshots"))
 MIN_RECORDING_SECONDS: int = _int("MIN_RECORDING_SECONDS", 15)
 MAX_RECORDING_SECONDS: int = _int("MAX_RECORDING_SECONDS", 5400)  # 1h30m
 SAVE_RECORDINGS_LOCALLY: bool = _bool("SAVE_RECORDINGS_LOCALLY", True)
+RECORD_AUDIO_ENABLED: bool = _bool("RECORD_AUDIO_ENABLED", False)
+RECORD_AUDIO_DEVICE: str = os.getenv("RECORD_AUDIO_DEVICE", "auto").strip() or "auto"
 
 # ---------------------------------------------------------------------------
 # Discord
 # ---------------------------------------------------------------------------
 DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "")
 DISCORD_COOLDOWN_SECONDS: int = _int("DISCORD_COOLDOWN_SECONDS", 60)
+DISCORD_MENTION_EVERYONE: bool = _bool("DISCORD_MENTION_EVERYONE", False)
 
 # ---------------------------------------------------------------------------
 # Kinect

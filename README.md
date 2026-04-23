@@ -16,7 +16,7 @@ admin dashboard accessible locally or remotely through Cloudflare Tunnel.
 | Auth | bcrypt passwords, session auth, rate limiting, lockout |
 | RBAC | admin / operator / viewer roles |
 | Alerts | Discord webhook with snapshot image attachment and optional video upload |
-| Recording | Auto-start/stop with min/max duration enforcement; local saving can be disabled |
+| Recording | Auto-start/stop with min/max duration enforcement; local saving and microphone audio are configurable |
 | Sound | GPIO PWM buzzer (access-denied tone on unknown) |
 | Database | SQLite with WAL mode |
 | Deployment | Gunicorn + systemd + Cloudflare Tunnel |
@@ -105,7 +105,9 @@ nano .env
 |-----|-------------|
 | `SECRET_KEY` | Generate with: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL |
+| `DISCORD_MENTION_EVERYONE` | Set `true` to include `@everyone` in unknown Discord alerts; defaults to `false` |
 | `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
+| `RECORD_AUDIO_ENABLED` | Optional microphone capture for recordings; defaults to `false` |
 | `SESSION_COOKIE_SECURE` | `true` if behind Cloudflare HTTPS, `false` for LAN-only HTTP |
 
 ### 5 — Initialise and run (dev)

@@ -764,7 +764,9 @@ def settings():
         "min_recording_seconds",
         "max_recording_seconds",
         "save_recordings_locally",
+        "record_audio_enabled",
         "discord_cooldown_seconds",
+        "discord_mention_everyone",
         "discord_webhook_url",
         "sound_enabled",
     ]

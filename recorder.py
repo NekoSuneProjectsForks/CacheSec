@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -79,6 +80,9 @@ class Recorder:
         self._min_duration      = config.MIN_RECORDING_SECONDS
         self._max_duration      = config.MAX_RECORDING_SECONDS
         self._save_locally      = config.SAVE_RECORDINGS_LOCALLY
+        self._record_audio      = config.RECORD_AUDIO_ENABLED
+        self._audio_path        = ""
+        self._audio_process: subprocess.Popen | None = None
 
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
@@ -197,6 +201,8 @@ class Recorder:
         min_duration = _int_setting("min_recording_seconds", config.MIN_RECORDING_SECONDS)
         max_duration = _int_setting("max_recording_seconds", config.MAX_RECORDING_SECONDS)
         save_locally = _bool_setting("save_recordings_locally", config.SAVE_RECORDINGS_LOCALLY)
+        record_audio = _bool_setting("record_audio_enabled", config.RECORD_AUDIO_ENABLED)
+        audio_path = str(Path(config.RECORDINGS_DIR) / f"unknown_{ts}.wav") if record_audio else ""
 
         # MJPEG into AVI — always works with OpenCV's bundled ffmpeg
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
@@ -207,7 +213,13 @@ class Recorder:
         if not writer.isOpened():
             logger.error("VideoWriter failed to open: %s", avi_path)
             writer.release()
+            _delete_quietly(audio_path)
             return
+
+        audio_process = None
+        audio_source = ""
+        if record_audio:
+            audio_process, audio_source = _start_audio_capture(audio_path)
 
         with self._state_lock:
             self._is_recording      = True
@@ -220,19 +232,27 @@ class Recorder:
             self._min_duration      = min_duration
             self._max_duration      = max_duration
             self._save_locally      = save_locally
+            self._record_audio      = record_audio
+            self._audio_path        = audio_path if audio_process else ""
+            self._audio_process     = audio_process
 
         logger.info(
-            "Recording started (MJPEG/AVI): %s  event=%d  save_locally=%s",
-            avi_path, event_id, save_locally,
+            "Recording started (MJPEG/AVI): %s  event=%d  save_locally=%s  audio=%s",
+            avi_path, event_id, save_locally, audio_source or "off",
         )
 
         started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         mp4_path   = str(Path(config.RECORDINGS_DIR) / mp4_fname)
         fields = {"recording_start": started_at}
+        notes = []
         if save_locally:
             fields["recording_path"] = mp4_path
         else:
-            fields["notes"] = "Recording will be uploaded to Discord only."
+            notes.append("Recording will be uploaded to Discord only.")
+        if record_audio and not audio_process:
+            notes.append("Audio recording requested but no microphone was available.")
+        if notes:
+            fields["notes"] = " ".join(notes)
         self._update_event_recording(event_id, **fields)
 
     def _finalise_recording(self) -> None:
@@ -245,14 +265,23 @@ class Recorder:
             mp4_fname   = self._mp4_filename
             start       = self._start_time
             save_locally = self._save_locally
+            audio_path  = self._audio_path
+            audio_process = self._audio_process
             self._is_recording  = False
             self._writer        = None
             self._event_id      = None
             self._avi_path      = ""
             self._mp4_filename  = ""
+            self._audio_path    = ""
+            self._audio_process = None
 
         if writer:
             writer.release()
+        if audio_process:
+            _stop_audio_capture(audio_process)
+        if not _usable_audio_file(audio_path):
+            _delete_quietly(audio_path)
+            audio_path = ""
 
         duration = round(time.monotonic() - start, 1)
         ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -266,7 +295,16 @@ class Recorder:
         mp4_path = str(Path(config.RECORDINGS_DIR) / mp4_fname)
         t = threading.Thread(
             target=self._reencode,
-            args=(avi_path, mp4_path, mp4_fname, event_id, duration, ended_at, save_locally),
+            args=(
+                avi_path,
+                mp4_path,
+                mp4_fname,
+                event_id,
+                duration,
+                ended_at,
+                save_locally,
+                audio_path,
+            ),
             daemon=True,
             name="Reencoder",
         )
@@ -285,6 +323,7 @@ class Recorder:
         duration: float,
         ended_at: str,
         save_locally: bool,
+        audio_path: str = "",
     ) -> None:
         """
         Re-encode the temp AVI to H.264 MP4 using system ffmpeg.
@@ -307,19 +346,27 @@ class Recorder:
                 self._update_event_recording(event_id, recording_path=avi_path)
             else:
                 self._upload_and_discard(avi_path, avi_fname, event_id, duration, ended_at)
+            _delete_quietly(audio_path)
             return
 
         logger.info("Re-encoding %s → %s", Path(avi_path).name, Path(mp4_path).name)
         cmd = [
             ffmpeg, "-y",
             "-i",       avi_path,
+        ]
+        if audio_path:
+            cmd += ["-i", audio_path]
+        cmd += [
             "-c:v",     "libx264",
             "-preset",  "veryfast",   # fast enough for Pi; change to 'faster' for quality
             "-crf",     "26",         # quality (18=lossless, 28=medium, 23=default)
             "-movflags", "+faststart", # moov atom at front — essential for browser streaming
-            "-an",                    # no audio track
-            mp4_path,
         ]
+        if audio_path:
+            cmd += ["-c:a", "aac", "-b:a", "96k", "-shortest"]
+        else:
+            cmd += ["-an"]  # no audio track
+        cmd.append(mp4_path)
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=300
@@ -334,6 +381,7 @@ class Recorder:
                     os.unlink(avi_path)
                 except OSError:
                     pass
+                _delete_quietly(audio_path)
                 if save_locally:
                     self._save_recording_row(
                         event_id=event_id,
@@ -363,8 +411,10 @@ class Recorder:
                 else:
                     _delete_quietly(mp4_path)
                     self._upload_and_discard(avi_path, avi_fname, event_id, duration, ended_at)
+                _delete_quietly(audio_path)
         except subprocess.TimeoutExpired:
             logger.error("ffmpeg timed out re-encoding %s", avi_path)
+            _delete_quietly(audio_path)
             if not save_locally:
                 _delete_quietly(avi_path)
                 _delete_quietly(mp4_path)
@@ -375,6 +425,7 @@ class Recorder:
                 )
         except Exception as exc:
             logger.error("Re-encode error: %s", exc)
+            _delete_quietly(audio_path)
             if not save_locally:
                 _delete_quietly(avi_path)
                 _delete_quietly(mp4_path)
@@ -443,6 +494,134 @@ def _file_size(path: str) -> int:
         return os.path.getsize(path)
     except OSError:
         return 0
+
+
+def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]:
+    if not audio_path:
+        return None, ""
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        logger.warning("Audio recording requested but ffmpeg is not available")
+        return None, ""
+
+    source = _audio_input_source()
+    if not source:
+        logger.warning("Audio recording requested but no microphone was detected")
+        return None, ""
+
+    cmd = [
+        ffmpeg, "-y",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-f", "alsa",
+        "-thread_queue_size", "512",
+        "-i", source,
+        "-ac", "1",
+        "-ar", "44100",
+        "-c:a", "pcm_s16le",
+        audio_path,
+    ]
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.25)
+        if process.poll() is not None:
+            _delete_quietly(audio_path)
+            logger.warning("Audio capture failed to start from input %s", source)
+            return None, ""
+        logger.info("Audio capture started from input %s", source)
+        return process, source
+    except Exception as exc:
+        _delete_quietly(audio_path)
+        logger.warning("Audio capture could not start: %s", exc)
+        return None, ""
+
+
+def _stop_audio_capture(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _usable_audio_file(path: str) -> bool:
+    return bool(path) and Path(path).is_file() and _file_size(path) > 1024
+
+
+def _audio_input_source() -> str:
+    override = config.RECORD_AUDIO_DEVICE.strip()
+    if override and override.lower() != "auto":
+        return override
+    detected = _detect_alsa_audio_source()
+    return detected or "default"
+
+
+def _detect_alsa_audio_source() -> str:
+    if os.name != "posix":
+        return ""
+
+    arecord = shutil.which("arecord")
+    if not arecord:
+        return "default"
+
+    try:
+        result = subprocess.run(
+            [arecord, "-l"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return "default"
+
+    if result.returncode != 0:
+        return "default"
+
+    devices: list[tuple[int, int, str]] = []
+    pattern = re.compile(
+        r"card\s+(\d+):\s*([^\[]+)\[([^\]]*)\],\s*device\s+(\d+):\s*([^\[]+)\[([^\]]*)\]",
+        re.IGNORECASE,
+    )
+    for line in result.stdout.splitlines():
+        match = pattern.search(line)
+        if not match:
+            continue
+        card = int(match.group(1))
+        device = int(match.group(4))
+        label = " ".join(part.strip() for part in match.groups()[1:] if part).lower()
+        devices.append((card, device, label))
+
+    if not devices:
+        return ""
+
+    def score(item: tuple[int, int, str]) -> int:
+        label = item[2]
+        if any(term in label for term in ("kinect", "xbox", "nui")):
+            return 100
+        if any(term in label for term in ("webcam", "camera")):
+            return 80
+        if "usb" in label:
+            return 60
+        if any(term in label for term in ("microphone", "mic")):
+            return 40
+        return 10
+
+    card, device, label = max(devices, key=score)
+    source = f"hw:{card},{device}"
+    logger.info("Detected audio input %s (%s)", source, label)
+    return source
 
 
 def _delete_quietly(path: str) -> None:

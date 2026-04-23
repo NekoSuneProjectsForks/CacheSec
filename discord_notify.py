@@ -2,7 +2,7 @@
 discord_notify.py — Discord webhook notifications for unknown detections.
 
 Features:
-  - @everyone mention with event details
+  - Optional @everyone mention with event details
   - Snapshot image attachment when available
   - Per-event cooldown to prevent spam
   - Graceful failure with error logging
@@ -46,6 +46,18 @@ def _discord_cooldown_seconds() -> int:
     except Exception:
         return config.DISCORD_COOLDOWN_SECONDS
     return value if value > 0 else config.DISCORD_COOLDOWN_SECONDS
+
+
+def _discord_mention_everyone() -> bool:
+    try:
+        from database import get_setting
+        value = get_setting(
+            "discord_mention_everyone",
+            "true" if config.DISCORD_MENTION_EVERYONE else "false",
+        )
+    except Exception:
+        return config.DISCORD_MENTION_EVERYONE
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _update_event_webhook_error(event_id: int | None, error: str) -> None:
@@ -115,7 +127,7 @@ def _build_payload(
     }
 
     return {
-        "content": "@everyone",
+        "content": "@everyone" if _discord_mention_everyone() else "Unknown person detected.",
         "embeds": [embed],
     }
 
