@@ -83,6 +83,8 @@ class Recorder:
         self._record_audio      = config.RECORD_AUDIO_ENABLED
         self._audio_path        = ""
         self._audio_process: subprocess.Popen | None = None
+        self._frame_count       = 0
+        self._avi_fps           = 15.0
 
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
@@ -162,6 +164,7 @@ class Recorder:
                     frame = self._frame_q.get(timeout=0.05)
                     if self._writer and frame is not None:
                         self._writer.write(frame)
+                        self._frame_count += 1
                 except queue.Empty:
                     pass
 
@@ -235,6 +238,8 @@ class Recorder:
             self._record_audio      = record_audio
             self._audio_path        = audio_path if audio_process else ""
             self._audio_process     = audio_process
+            self._frame_count       = 0
+            self._avi_fps           = fps
 
         logger.info(
             "Recording started (MJPEG/AVI): %s  event=%d  save_locally=%s  audio=%s",
@@ -267,6 +272,8 @@ class Recorder:
             save_locally = self._save_locally
             audio_path  = self._audio_path
             audio_process = self._audio_process
+            frame_count = self._frame_count
+            avi_fps     = self._avi_fps
             self._is_recording  = False
             self._writer        = None
             self._event_id      = None
@@ -274,6 +281,7 @@ class Recorder:
             self._mp4_filename  = ""
             self._audio_path    = ""
             self._audio_process = None
+            self._frame_count   = 0
 
         if writer:
             writer.release()
@@ -304,6 +312,8 @@ class Recorder:
                 ended_at,
                 save_locally,
                 audio_path,
+                frame_count,
+                avi_fps,
             ),
             daemon=True,
             name="Reencoder",
@@ -324,6 +334,8 @@ class Recorder:
         ended_at: str,
         save_locally: bool,
         audio_path: str = "",
+        frame_count: int = 0,
+        avi_fps: float = 15.0,
     ) -> None:
         """
         Re-encode the temp AVI to H.264 MP4 using system ffmpeg.
@@ -350,6 +362,13 @@ class Recorder:
             return
 
         logger.info("Re-encoding %s → %s", Path(avi_path).name, Path(mp4_path).name)
+        video_filter = _timeline_video_filter(frame_count, duration, avi_fps)
+        logger.info(
+            "Recording timeline: frames=%d real_duration=%.1fs filter=%s",
+            frame_count,
+            duration,
+            video_filter or "none",
+        )
         cmd = [
             ffmpeg, "-y",
             "-i",       avi_path,
@@ -362,8 +381,16 @@ class Recorder:
             "-crf",     "26",         # quality (18=lossless, 28=medium, 23=default)
             "-movflags", "+faststart", # moov atom at front — essential for browser streaming
         ]
+        if video_filter:
+            cmd += ["-vf", video_filter]
         if audio_path:
-            cmd += ["-c:a", "aac", "-b:a", "96k", "-ac", "1", "-shortest"]
+            cmd += [
+                "-af", "aresample=async=1:first_pts=0",
+                "-c:a", "aac",
+                "-b:a", "96k",
+                "-ac", "1",
+                "-shortest",
+            ]
         else:
             cmd += ["-an"]  # no audio track
         cmd.append(mp4_path)
@@ -494,6 +521,31 @@ def _file_size(path: str) -> int:
         return os.path.getsize(path)
     except OSError:
         return 0
+
+
+def _timeline_video_filter(frame_count: int, duration: float, avi_fps: float) -> str:
+    """
+    OpenCV writes AVI timestamps at a fixed FPS even if frames arrive faster or
+    slower. Audio is captured in real time, so stretch/compress video PTS to
+    the measured wall-clock duration before muxing audio.
+    """
+    if frame_count <= 1 or duration <= 0 or avi_fps <= 0:
+        return ""
+
+    encoded_duration = frame_count / avi_fps
+    if encoded_duration <= 0:
+        return ""
+
+    factor = duration / encoded_duration
+    if factor <= 0:
+        return ""
+
+    # Tiny differences are not worth filtering and can create extra work.
+    if 0.98 <= factor <= 1.02:
+        return ""
+
+    output_fps = max(1, min(30, round(frame_count / duration)))
+    return f"setpts={factor:.8f}*PTS,fps={output_fps}"
 
 
 def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]:
