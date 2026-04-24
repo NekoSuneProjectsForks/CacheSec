@@ -16,10 +16,13 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         ffmpeg \
+        libfreenect-dev \
         libgl1 \
         libglib2.0-0 \
         libgomp1 \
+        libusb-1.0-0-dev \
         libsm6 \
         libxext6 \
         tini \

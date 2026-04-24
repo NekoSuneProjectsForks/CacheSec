@@ -241,9 +241,76 @@ those compose-only variables before starting the stack.
 For IP cameras, no host device mapping is required.
 
 For a local webcam or Pi camera, uncomment the `devices:` section in
-`docker-compose.yml` and map `/dev/video0` (or whichever video device you use).
+`docker-compose.yml`.
+
+By default the compose example maps host `/dev/video0` to container
+`/dev/video0`. On Raspberry Pi/libcamera systems the capture node is often not
+`/dev/video0`; use `v4l2-ctl --list-devices` on the host to find the actual
+capture node, then set:
+
+```bash
+CACHESEC_VIDEO_DEVICE=/dev/video19
+CAMERA_INDEX=0
+```
+
+Replace `/dev/video19` with the usable host device. Keeping `CAMERA_INDEX=0`
+works because the selected host node is mapped to `/dev/video0` inside the
+container.
 
 For the GPIO buzzer on Raspberry Pi, also map `/dev/gpiochip0`.
+
+### Kinect v1 in Docker
+
+Kinect v1 / Xbox 360 Kinect is not a normal V4L2 webcam in this app. Do not
+map it as `/dev/video0`; CacheSec accesses it through OpenKinect/libfreenect.
+
+On the Raspberry Pi host, verify the Kinect is fully powered and enumerated:
+
+```bash
+lsusb | grep -i '045e'
+```
+
+A fully powered Kinect v1 should expose all three Microsoft USB functions:
+
+```text
+045e:02ae  camera
+045e:02ad  audio
+045e:02b0  motor
+```
+
+If only `045e:02b0` appears, the USB side is connected but the Kinect does not
+have 12V power, so the camera cannot work.
+
+Use USB passthrough for Docker:
+
+```yaml
+privileged: true
+volumes:
+  - ./data:/data
+  - /dev/bus/usb:/dev/bus/usb
+```
+
+Set the camera source to Kinect:
+
+```bash
+CAMERA_PREFERRED_SOURCE=kinect
+KINECT_ENABLED=true
+KINECT_MOTOR_ENABLED=false
+```
+
+The camera source is also stored in the SQLite settings database. After the
+first boot, changing `.env` may not override the existing value. Change the
+camera source in the admin Settings page, or remove `/data/cachesec.db` if you
+are intentionally resetting the deployment.
+
+The container image must include `libfreenect` and the Python `freenect`
+package. If you are using a published GHCR image, rebuild/publish it after
+Dockerfile changes, or build locally with:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
 
 ### GitHub Container Registry
 

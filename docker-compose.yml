@@ -1,9 +1,7 @@
 services:
   cachesec:
     container_name: cachesec
-    build:
-      context: .
-    image: ${CACHESEC_IMAGE:-cachesec:local}
+    image: ghcr.io/nekosuneprojectsforks/cachesec:main
     restart: unless-stopped
     ports:
       - "${CACHESEC_BIND_PORT:-5000}:5000"
@@ -24,9 +22,12 @@ services:
       - cachesec-data:/data
     stop_grace_period: 30s
     # Uncomment these if you want direct host hardware access from the container.
+    # Set CACHESEC_VIDEO_DEVICE to the host V4L2 node if it is not /dev/video0
+    # (common on Raspberry Pi/libcamera systems). The app can keep CAMERA_INDEX=0
+    # because the chosen host node is mapped to /dev/video0 inside the container.
     # devices:
-    #   - /dev/video0:/dev/video0
-    #   - /dev/gpiochip0:/dev/gpiochip0
+    #   - ${CACHESEC_VIDEO_DEVICE:-/dev/video0}:/dev/video0
+    #   - ${CACHESEC_GPIO_DEVICE:-/dev/gpiochip0}:/dev/gpiochip0
 
 volumes:
   cachesec-data:
