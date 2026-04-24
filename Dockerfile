@@ -74,7 +74,8 @@ RUN python -m pip install --upgrade pip \
     fi \
     && if [ "$INSTALL_DETECTRON2" = "true" ]; then \
         python -m pip install torch torchvision --index-url "$TORCH_INDEX_URL"; \
-        python -m pip install -r requirements-detectron2.txt; \
+        python -m pip install --upgrade setuptools wheel; \
+        python -m pip install --no-build-isolation -r requirements-detectron2.txt; \
     fi
 
 COPY . .

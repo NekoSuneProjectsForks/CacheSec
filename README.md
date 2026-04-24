@@ -95,7 +95,7 @@ and Detectron2 wheels depend on your CPU/GPU, Python, and CUDA stack. Install a
 matching PyTorch build first, then:
 
 ```bash
-pip install -r requirements-detectron2.txt
+pip install --no-build-isolation -r requirements-detectron2.txt
 ```
 
 For Docker builds, set `INSTALL_DETECTRON2=true`. CPU builds use the PyTorch CPU
