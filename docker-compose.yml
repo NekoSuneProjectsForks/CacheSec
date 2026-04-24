@@ -1,0 +1,32 @@
+services:
+  cachesec:
+    container_name: cachesec
+    build:
+      context: .
+    image: ${CACHESEC_IMAGE:-cachesec:local}
+    restart: unless-stopped
+    ports:
+      - "${CACHESEC_BIND_PORT:-5000}:5000"
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5000
+      PROXY_COUNT: ${CACHESEC_PROXY_COUNT:-0}
+      SESSION_COOKIE_SECURE: ${CACHESEC_SESSION_COOKIE_SECURE:-false}
+      DATABASE_PATH: /data/cachesec.db
+      RECORDINGS_DIR: /data/recordings
+      SNAPSHOTS_DIR: /data/snapshots
+      UPLOAD_FOLDER: /data/uploads/faces
+      LOG_FILE: /data/logs/cachesec.log
+      HOME: /data
+    volumes:
+      - cachesec-data:/data
+    stop_grace_period: 30s
+    # Uncomment these if you want direct host hardware access from the container.
+    # devices:
+    #   - /dev/video0:/dev/video0
+    #   - /dev/gpiochip0:/dev/gpiochip0
+
+volumes:
+  cachesec-data:

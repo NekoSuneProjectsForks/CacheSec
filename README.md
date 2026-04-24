@@ -19,7 +19,7 @@ admin dashboard accessible locally or remotely through Cloudflare Tunnel.
 | Recording | Auto-start/stop with min/max duration enforcement; local saving and microphone audio are configurable |
 | Sound | GPIO PWM buzzer (access-denied tone on unknown) |
 | Database | SQLite with WAL mode |
-| Deployment | Gunicorn + systemd + Cloudflare Tunnel |
+| Deployment | Gunicorn + systemd or Docker + Cloudflare Tunnel |
 | Audit log | All admin actions tracked |
 
 ---
@@ -108,6 +108,8 @@ nano .env
 | `DISCORD_MENTION_EVERYONE` | Set `true` to include `@everyone` in unknown Discord alerts; defaults to `false` |
 | `CAMERA_PREFERRED_SOURCE` | Use `webcam`, `kinect`, or `ip` |
 | `IP_CAMERA_URL` | RTSP/HTTP/MJPEG stream URL when using an IP camera |
+| `IP_CAMERA_ONVIF_NIGHT_MODE` | Optional: `detect` makes CacheSec drive the camera's ONVIF `IrCutFilter` based on darkness |
+| `IP_CAMERA_ONVIF_HOST` / `IP_CAMERA_ONVIF_PORT` | Optional ONVIF endpoint override if the control port differs from the stream URL |
 | `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
 | `RECORD_AUDIO_ENABLED` | Optional microphone/IP-camera audio capture for recordings; defaults to `false` |
 | `SESSION_COOKIE_SECURE` | `true` if behind Cloudflare HTTPS, `false` for LAN-only HTTP |
@@ -193,6 +195,66 @@ sudo usermod -aG gpio cache
 sudo usermod -aG audio cache   # required if recording microphone audio
 # Log out and back in, or restart the service
 ```
+
+---
+
+## Docker
+
+The repository now includes:
+
+- `Dockerfile` â€” production image with Gunicorn, ffmpeg, and OpenCV runtime libs
+- `docker-compose.yml` â€” local container deployment with persistent `/data` storage
+- `.github/workflows/container.yml` â€” GitHub Actions workflow that builds and publishes a multi-arch image to GHCR
+
+### Local Docker Compose
+
+1. Copy `.env.example` to `.env`
+2. Start the stack:
+
+```bash
+docker compose up --build -d
+```
+
+The container stores its runtime state in `/data` inside the container, backed by
+the named volume `cachesec-data`. That includes:
+
+- SQLite database
+- uploaded face images
+- snapshots
+- recordings
+- logs
+- downloaded ONNX models
+
+Open `http://localhost:5000` after the container becomes healthy.
+
+`docker-compose.yml` intentionally forces Docker-friendly defaults for a local
+HTTP deployment:
+
+- `CACHESEC_SESSION_COOKIE_SECURE=false`
+- `CACHESEC_PROXY_COUNT=0`
+
+If you run the container behind HTTPS and a trusted reverse proxy, override
+those compose-only variables before starting the stack.
+
+### Camera / GPIO passthrough
+
+For IP cameras, no host device mapping is required.
+
+For a local webcam or Pi camera, uncomment the `devices:` section in
+`docker-compose.yml` and map `/dev/video0` (or whichever video device you use).
+
+For the GPIO buzzer on Raspberry Pi, also map `/dev/gpiochip0`.
+
+### GitHub Container Registry
+
+The GitHub Actions workflow publishes the image to:
+
+```text
+ghcr.io/<your-github-owner>/cachesec
+```
+
+It runs on pushes to `main`/`master`, version tags like `v1.0.0`, and manual
+dispatches. Pull requests build the image without pushing it.
 
 ---
 

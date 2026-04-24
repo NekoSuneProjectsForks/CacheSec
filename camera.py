@@ -38,6 +38,7 @@ import cv2
 import numpy as np
 
 import config
+from onvif_control import OnvifNightVisionController, OnvifNightVisionSettings
 from recognition import get_recognizer, DetectedFace
 from recorder import get_recorder
 from utils import timestamped_filename
@@ -437,6 +438,7 @@ class CameraLoop:
 
         _camera_status["running"] = True
         _camera_status["error"]   = ""
+        _night_vision_active = False
         _camera_status["night_vision"] = False
         _camera_status["sls_enabled"] = config.SLS_ENABLED
         _camera_status["sls_active"] = False
@@ -448,6 +450,13 @@ class CameraLoop:
         use_kinect = False
         cap = None
         preferred_source = _live_camera_preferred_source()
+        ip_source_url = _normalize_camera_url(_live_setting("ip_camera_url", config.IP_CAMERA_URL))
+        ip_onvif = _build_ip_onvif_controller(ip_source_url) if preferred_source == "ip" else None
+
+        initial_ip_night = ip_onvif.initial_state() if ip_onvif is not None else None
+        if initial_ip_night is not None:
+            _night_vision_active = initial_ip_night
+            _camera_status["night_vision"] = initial_ip_night
 
         def primary_source_label() -> str:
             return "ip" if preferred_source == "ip" else "webcam"
@@ -648,10 +657,23 @@ class CameraLoop:
                     _camera_status["sls_active"] = False
                     _camera_status["depth"] = False
                     if preferred_source == "ip":
-                        # IP cameras usually handle IR/night mode in firmware.
-                        # Do not double-process their frames with the software
-                        # green night-vision filter.
-                        if _night_vision_active:
+                        # IP cameras can expose IR-cut control via ONVIF. When
+                        # enabled, use the same brightness detection as the
+                        # webcam path, but send the switch command to the
+                        # camera instead of drawing a fake green NV filter.
+                        if ip_onvif is not None:
+                            gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                            if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
+                                if ip_onvif.set_night_vision(True):
+                                    _night_vision_active = True
+                                    _camera_status["night_vision"] = True
+                                    logger.info("IP camera ONVIF night vision ON (brightness=%.1f)", gray_mean)
+                            elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
+                                if ip_onvif.set_night_vision(False):
+                                    _night_vision_active = False
+                                    _camera_status["night_vision"] = False
+                                    logger.info("IP camera ONVIF night vision OFF (brightness=%.1f)", gray_mean)
+                        elif _night_vision_active:
                             _night_vision_active = False
                             _camera_status["night_vision"] = False
                         display_frame = frame
@@ -857,10 +879,39 @@ def _live_setting(key: str, default: str = "") -> str:
     return value if value is not None else default
 
 
+def _live_int_setting(key: str, default: int = 0) -> int:
+    raw = _live_setting(key, str(default)).strip()
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _live_camera_preferred_source() -> str:
     source = _live_setting("camera_preferred_source", config.CAMERA_PREFERRED_SOURCE)
     source = source.strip().lower()
     return source if source in {"webcam", "ip", "kinect"} else "webcam"
+
+
+def _build_ip_onvif_controller(stream_url: str) -> OnvifNightVisionController | None:
+    mode = _live_setting("ip_camera_onvif_night_mode", config.IP_CAMERA_ONVIF_NIGHT_MODE)
+    mode = mode.strip().lower()
+    if mode not in {"disabled", "detect"}:
+        mode = "disabled"
+    if mode == "disabled":
+        return None
+
+    settings = OnvifNightVisionSettings(
+        mode=mode,
+        host=_live_setting("ip_camera_onvif_host", config.IP_CAMERA_ONVIF_HOST).strip(),
+        port=_live_int_setting("ip_camera_onvif_port", config.IP_CAMERA_ONVIF_PORT),
+        username=_live_setting("ip_camera_onvif_username", config.IP_CAMERA_ONVIF_USERNAME),
+        password=_live_setting("ip_camera_onvif_password", config.IP_CAMERA_ONVIF_PASSWORD),
+        wsdl_dir=_live_setting("ip_camera_onvif_wsdl_dir", config.IP_CAMERA_ONVIF_WSDL_DIR).strip(),
+        stream_url=stream_url,
+        force_persistence=False,
+    )
+    return OnvifNightVisionController(settings)
 
 
 def _configured_ip_sources(include_primary: bool | None = None) -> list[dict[str, object]]:

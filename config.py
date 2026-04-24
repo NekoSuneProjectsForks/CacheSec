@@ -63,6 +63,14 @@ IP_CAMERA_URLS: str = os.getenv("IP_CAMERA_URLS", "").strip()
 IP_CAMERA_RTSP_TRANSPORT: str = os.getenv("IP_CAMERA_RTSP_TRANSPORT", "tcp").strip().lower()
 if IP_CAMERA_RTSP_TRANSPORT not in {"tcp", "udp", "udp_multicast", "http"}:
     IP_CAMERA_RTSP_TRANSPORT = "tcp"
+IP_CAMERA_ONVIF_NIGHT_MODE: str = os.getenv("IP_CAMERA_ONVIF_NIGHT_MODE", "disabled").strip().lower()
+if IP_CAMERA_ONVIF_NIGHT_MODE not in {"disabled", "detect"}:
+    IP_CAMERA_ONVIF_NIGHT_MODE = "disabled"
+IP_CAMERA_ONVIF_HOST: str = os.getenv("IP_CAMERA_ONVIF_HOST", "").strip()
+IP_CAMERA_ONVIF_PORT: int = _int("IP_CAMERA_ONVIF_PORT", 0)
+IP_CAMERA_ONVIF_USERNAME: str = os.getenv("IP_CAMERA_ONVIF_USERNAME", "").strip()
+IP_CAMERA_ONVIF_PASSWORD: str = os.getenv("IP_CAMERA_ONVIF_PASSWORD", "")
+IP_CAMERA_ONVIF_WSDL_DIR: str = os.getenv("IP_CAMERA_ONVIF_WSDL_DIR", "").strip()
 
 # ---------------------------------------------------------------------------
 # Recording

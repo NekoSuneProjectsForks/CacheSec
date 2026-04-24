@@ -51,6 +51,9 @@ gpiozero==2.0.1
 # ---- Notifications ----
 requests==2.32.3
 
+# ---- IP camera control ----
+onvif-zeep==0.2.12
+
 # ---- Proxy / Cloudflare ----
 # Werkzeug ProxyFix is included with Flask; no separate install needed.
 Werkzeug==3.1.8
