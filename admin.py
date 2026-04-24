@@ -58,6 +58,12 @@ logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__)
 
+
+def _storage_disk_path() -> str:
+    """Pick a local CacheSec storage path for filesystem usage stats."""
+    return config.RECORDINGS_DIR or config.SNAPSHOTS_DIR or config.UPLOAD_FOLDER or "."
+
+
 # ---------------------------------------------------------------------------
 # Dashboard overview
 # ---------------------------------------------------------------------------
@@ -79,7 +85,7 @@ def dashboard():
     rec_state  = get_recorder().get_state()
 
     storage_mb = dir_size_mb(config.RECORDINGS_DIR) + dir_size_mb(config.SNAPSHOTS_DIR)
-    disk_pct   = disk_usage_percent("/")
+    disk_pct   = disk_usage_percent(_storage_disk_path())
 
     return render_template(
         "admin/dashboard.html",
@@ -103,15 +109,17 @@ def dashboard():
 @admin_bp.route("/live")
 @operator_required
 def live_feed():
-    return render_template("admin/live.html")
+    from camera import get_live_sources
+    return render_template("admin/live.html", live_sources=get_live_sources())
 
 
 @admin_bp.route("/live/stream")
+@admin_bp.route("/live/stream/<source_id>")
 @operator_required
-def live_stream():
+def live_stream(source_id: str = "primary"):
     from camera import generate_mjpeg
     return Response(
-        generate_mjpeg(),
+        generate_mjpeg(source_id),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
@@ -172,6 +180,8 @@ def delete_recording(rec_id: int):
         flash(f"File delete error: {exc}", "warning")
 
     models.soft_delete_recording(db, rec_id, deleted_by=session["user_id"])
+    if row["event_id"]:
+        models.update_event(db, row["event_id"], recording_path="")
     audit(
         "RECORDING_DELETED",
         user_id=session["user_id"],
@@ -181,6 +191,63 @@ def delete_recording(rec_id: int):
         ip_address=get_client_ip(),
     )
     flash("Recording deleted.", "success")
+    return redirect(url_for("admin.recordings"))
+
+
+@admin_bp.route("/recordings/delete-batch", methods=["POST"])
+@admin_required
+def delete_recordings_batch():
+    raw_ids = request.form.getlist("recording_ids")
+    rec_ids: list[int] = []
+    for raw_id in raw_ids:
+        try:
+            rec_ids.append(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+
+    rec_ids = sorted(set(rec_ids))
+    if not rec_ids:
+        flash("No recordings selected.", "warning")
+        return redirect(url_for("admin.recordings"))
+
+    db = get_db()
+    deleted = 0
+    file_errors: list[str] = []
+    for rec_id in rec_ids:
+        row = db.execute(
+            "SELECT * FROM recordings WHERE id=? AND deleted=0", (rec_id,)
+        ).fetchone()
+        if not row:
+            continue
+
+        fpath = Path(config.RECORDINGS_DIR) / Path(row["filename"]).name
+        try:
+            fpath.unlink(missing_ok=True)
+        except OSError as exc:
+            file_errors.append(f"{row['filename']}: {exc}")
+
+        models.soft_delete_recording(db, rec_id, deleted_by=session["user_id"])
+        if row["event_id"]:
+            models.update_event(db, row["event_id"], recording_path="")
+        deleted += 1
+
+    if deleted:
+        audit(
+            "RECORDINGS_BATCH_DELETED",
+            user_id=session["user_id"],
+            username=session["username"],
+            target_type="recording",
+            target_id=",".join(str(i) for i in rec_ids),
+            detail=f"{deleted} recording(s) deleted",
+            ip_address=get_client_ip(),
+        )
+        flash(f"{deleted} recording(s) deleted.", "success")
+    else:
+        flash("No matching recordings were deleted.", "warning")
+
+    if file_errors:
+        flash("Some files could not be removed: " + "; ".join(file_errors[:3]), "warning")
+
     return redirect(url_for("admin.recordings"))
 
 
@@ -701,19 +768,32 @@ def settings():
     _setting_keys = [
         "recognition_threshold",
         "frame_skip",
+        "camera_preferred_source",
+        "ip_camera_url",
+        "ip_camera_urls",
+        "ip_camera_rtsp_transport",
+        "ip_camera_onvif_night_mode",
+        "ip_camera_onvif_host",
+        "ip_camera_onvif_port",
+        "ip_camera_onvif_username",
+        "ip_camera_onvif_password",
+        "ip_camera_onvif_wsdl_dir",
         "unknown_cooldown_seconds",
         "min_recording_seconds",
         "max_recording_seconds",
+        "save_recordings_locally",
+        "record_audio_enabled",
         "discord_cooldown_seconds",
+        "discord_mention_everyone",
         "discord_webhook_url",
         "sound_enabled",
     ]
 
     if request.method == "POST":
         for key in _setting_keys:
-            val = request.form.get(key, "").strip()
-            if val is not None:
-                set_setting(key, val, user_id=session["user_id"])
+            values = request.form.getlist(key)
+            val = values[-1].strip() if values else ""
+            set_setting(key, val, user_id=session["user_id"])
 
         audit("SETTINGS_CHANGED", user_id=session["user_id"],
               username=session["username"], ip_address=get_client_ip())
@@ -748,7 +828,7 @@ def health():
 
     cam_status = get_camera_status()
     rec_state  = get_recorder().get_state()
-    disk_pct   = disk_usage_percent("/")
+    disk_pct   = disk_usage_percent(_storage_disk_path())
     storage_mb = dir_size_mb(config.RECORDINGS_DIR) + dir_size_mb(config.SNAPSHOTS_DIR)
 
     return render_template(
@@ -794,7 +874,7 @@ def api_status():
         "unknown_today":       unkn,
         "recognized_today":    recg,
         "enrolled_count":      len(models.get_all_enrolled(db)),
-        "disk_pct":            disk_usage_percent("/"),
+        "disk_pct":            disk_usage_percent(_storage_disk_path()),
     })
 
 

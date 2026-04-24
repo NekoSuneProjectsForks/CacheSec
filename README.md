@@ -15,11 +15,11 @@ admin dashboard accessible locally or remotely through Cloudflare Tunnel.
 | Web dashboard | Flask + Bootstrap 5 dark theme |
 | Auth | bcrypt passwords, session auth, rate limiting, lockout |
 | RBAC | admin / operator / viewer roles |
-| Alerts | Discord webhook with snapshot image attachment |
-| Recording | Auto-start/stop with min/max duration enforcement |
+| Alerts | Discord webhook with snapshot image attachment and optional video upload |
+| Recording | Auto-start/stop with min/max duration enforcement; local saving and microphone audio are configurable |
 | Sound | GPIO PWM buzzer (access-denied tone on unknown) |
 | Database | SQLite with WAL mode |
-| Deployment | Gunicorn + systemd + Cloudflare Tunnel |
+| Deployment | Gunicorn + systemd or Docker + Cloudflare Tunnel |
 | Audit log | All admin actions tracked |
 
 ---
@@ -105,6 +105,13 @@ nano .env
 |-----|-------------|
 | `SECRET_KEY` | Generate with: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL |
+| `DISCORD_MENTION_EVERYONE` | Set `true` to include `@everyone` in unknown Discord alerts; defaults to `false` |
+| `CAMERA_PREFERRED_SOURCE` | Use `webcam`, `kinect`, or `ip` |
+| `IP_CAMERA_URL` | RTSP/HTTP/MJPEG stream URL when using an IP camera |
+| `IP_CAMERA_ONVIF_NIGHT_MODE` | Optional: `detect` makes CacheSec drive the camera's ONVIF `IrCutFilter` based on darkness |
+| `IP_CAMERA_ONVIF_HOST` / `IP_CAMERA_ONVIF_PORT` | Optional ONVIF endpoint override if the control port differs from the stream URL |
+| `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
+| `RECORD_AUDIO_ENABLED` | Optional microphone/IP-camera audio capture for recordings; defaults to `false` |
 | `SESSION_COOKIE_SECURE` | `true` if behind Cloudflare HTTPS, `false` for LAN-only HTTP |
 
 ### 5 — Initialise and run (dev)
@@ -185,8 +192,161 @@ The service user needs to be in the `gpio` group:
 
 ```bash
 sudo usermod -aG gpio cache
+sudo usermod -aG audio cache   # required if recording microphone audio
 # Log out and back in, or restart the service
 ```
+
+---
+
+## Docker
+
+The repository now includes:
+
+- `Dockerfile` â€” production image with Gunicorn, ffmpeg, and OpenCV runtime libs
+- `docker-compose.yml` â€” local container deployment with persistent `/data` storage
+- `.github/workflows/container.yml` â€” GitHub Actions workflow that builds and publishes a multi-arch image to GHCR
+
+### Local Docker Compose
+
+1. Copy `.env.example` to `.env`
+2. Start the stack:
+
+```bash
+docker compose up --build -d
+```
+
+The container stores its runtime state in `/data` inside the container, backed by
+the named volume `cachesec-data`. That includes:
+
+- SQLite database
+- uploaded face images
+- snapshots
+- recordings
+- logs
+- downloaded ONNX models
+
+Open `http://localhost:5000` after the container becomes healthy.
+
+`docker-compose.yml` intentionally forces Docker-friendly defaults for a local
+HTTP deployment:
+
+- `CACHESEC_SESSION_COOKIE_SECURE=false`
+- `CACHESEC_PROXY_COUNT=0`
+
+If you run the container behind HTTPS and a trusted reverse proxy, override
+those compose-only variables before starting the stack.
+
+### Camera / GPIO passthrough
+
+For IP cameras, no host device mapping is required.
+
+For a local webcam or Pi camera, uncomment the `devices:` section in
+`docker-compose.yml`.
+
+By default the compose example maps host `/dev/video0` to container
+`/dev/video0`. On Raspberry Pi/libcamera systems the capture node is often not
+`/dev/video0`; use `v4l2-ctl --list-devices` on the host to find the actual
+capture node, then set:
+
+```bash
+CACHESEC_VIDEO_DEVICE=/dev/video19
+CAMERA_INDEX=0
+```
+
+Replace `/dev/video19` with the usable host device. Keeping `CAMERA_INDEX=0`
+works because the selected host node is mapped to `/dev/video0` inside the
+container.
+
+For the GPIO buzzer on Raspberry Pi, also map `/dev/gpiochip0`.
+
+### Kinect v1 in Docker
+
+Kinect v1 / Xbox 360 Kinect is not a normal V4L2 webcam in this app. Do not
+map it as `/dev/video0`; CacheSec accesses it through OpenKinect/libfreenect.
+
+On the Raspberry Pi host, verify the Kinect is fully powered and enumerated:
+
+```bash
+lsusb | grep -i '045e'
+```
+
+A fully powered Kinect v1 should expose all three Microsoft USB functions:
+
+```text
+045e:02ae  camera
+045e:02ad  audio
+045e:02b0  motor
+```
+
+If only `045e:02b0` appears, the USB side is connected but the Kinect does not
+have 12V power, so the camera cannot work.
+
+Use USB passthrough for Docker:
+
+```yaml
+privileged: true
+volumes:
+  - ./data:/data
+  - /dev/bus/usb:/dev/bus/usb
+# Optional if you want ALSA microphone/audio capture from the host:
+devices:
+  - /dev/snd:/dev/snd
+```
+
+Set the camera source to Kinect:
+
+```bash
+CAMERA_PREFERRED_SOURCE=kinect
+KINECT_ENABLED=true
+KINECT_MOTOR_ENABLED=false
+```
+
+The camera source is also stored in the SQLite settings database. After the
+first boot, changing `.env` may not override the existing value. Change the
+camera source in the admin Settings page, or remove `/data/cachesec.db` if you
+are intentionally resetting the deployment.
+
+The container image must include `libfreenect` and the Python `freenect`
+package. The Dockerfile installs Kinect support by default with
+`INSTALL_KINECT=true`. CacheSec still auto-detects the device at runtime, so the
+image can run without a Kinect attached.
+
+The Kinect-enabled Docker build also installs `alsa-utils`,
+`kinect-audio-setup`, `freenect`, `libfreenect-bin`, `libfreenect-dev`,
+`libfreenect0.5`, and libusb runtime/build packages. `kinect-audio-setup` is a
+Debian `contrib` package and downloads Microsoft's non-redistributable Kinect
+audio firmware during package setup, so the image build needs network access.
+
+If you are using a published GHCR image, rebuild/publish it after Dockerfile
+changes, or build locally with:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+To build a smaller image without Kinect support:
+
+```bash
+docker compose build --build-arg INSTALL_KINECT=false
+```
+
+### GitHub Container Registry
+
+The GitHub Actions workflow publishes the image to:
+
+```text
+ghcr.io/<your-github-owner>/cachesec
+```
+
+It builds two image variants:
+
+- `:main`, `:latest`, and version tags: default smaller build without Kinect
+  packages (`INSTALL_KINECT=false`)
+- `:kinect`: Kinect-enabled build (`INSTALL_KINECT=true`)
+
+It runs on pushes to `main`/`master`, version tags like `v1.0.0`, and manual
+dispatches. Pull requests build the image without pushing it.
 
 ---
 
@@ -372,7 +532,7 @@ This system is designed for use on **your own property** with people who have
 
 - All data stays on-device (no cloud processing)
 - Embeddings are 512-dimensional float vectors; they cannot reconstruct a face
-- Snapshots and recordings are stored locally only
+- Snapshots are stored locally; recordings can be stored locally or uploaded to Discord only
 - Audit log tracks who enrolled or deleted face data
 - Enrolled people can be deleted (removing images and embeddings) at any time
 

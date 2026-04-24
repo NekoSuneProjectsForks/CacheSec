@@ -8,6 +8,7 @@ import os
 import re
 import logging
 import hashlib
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -113,15 +114,12 @@ def dir_size_mb(path: str) -> float:
     return round(total / (1024 * 1024), 2)
 
 
-def disk_usage_percent(path: str = "/") -> float:
-    """Return disk usage percentage for the filesystem at `path`."""
+def disk_usage_percent(path: str = ".") -> float:
+    """Return disk usage percentage for the filesystem containing `path`."""
     try:
-        st = os.statvfs(path)
-        total = st.f_blocks * st.f_frsize
-        free  = st.f_bfree  * st.f_frsize
-        used  = total - free
-        return round(used / total * 100, 1) if total else 0.0
-    except OSError:
+        usage = shutil.disk_usage(Path(path).resolve())
+        return round(usage.used / usage.total * 100, 1) if usage.total else 0.0
+    except (OSError, RuntimeError, ValueError):
         return 0.0
 
 

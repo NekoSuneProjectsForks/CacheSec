@@ -4,11 +4,31 @@
 
 {% block content %}
 <div class="card cs-card">
+  {% if session.get('role') == 'admin' %}
+  <form id="batch-delete-form" method="POST"
+        action="{{ url_for('admin.delete_recordings_batch') }}"
+        onsubmit="return confirmBatchDelete()"></form>
+  <div class="card-header cs-card-header d-flex justify-content-between align-items-center gap-2">
+    <span><i class="bi bi-list-check me-2"></i>Saved video clips</span>
+    <button type="submit" form="batch-delete-form"
+            id="batchDeleteBtn"
+            class="btn btn-sm btn-outline-danger"
+            disabled>
+      <i class="bi bi-trash me-1"></i>Delete Selected
+    </button>
+  </div>
+  {% endif %}
   <div class="card-body p-0">
     <div class="table-responsive">
       <table class="table table-dark table-hover table-sm mb-0">
         <thead class="table-secondary">
           <tr>
+            {% if session.get('role') == 'admin' %}
+            <th class="text-center" style="width: 42px;">
+              <input class="form-check-input" type="checkbox" id="selectAllRecordings"
+                     aria-label="Select all recordings">
+            </th>
+            {% endif %}
             <th class="col-hide-mobile">#</th>
             <th>File</th>
             <th class="col-hide-mobile">Duration</th>
@@ -21,6 +41,16 @@
         <tbody>
           {% for rec in recordings %}
           <tr>
+            {% if session.get('role') == 'admin' %}
+            <td class="text-center">
+              <input class="form-check-input recording-checkbox"
+                     type="checkbox"
+                     name="recording_ids"
+                     value="{{ rec.id }}"
+                     form="batch-delete-form"
+                     aria-label="Select recording {{ rec.id }}">
+            </td>
+            {% endif %}
             <td class="col-hide-mobile"><small class="text-muted">{{ rec.id }}</small></td>
             <td>
               {% set ext = rec.filename.rsplit('.', 1)[-1].lower() %}
@@ -72,7 +102,10 @@
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="7" class="text-center text-muted py-4">No recordings yet.</td></tr>
+          <tr>
+            <td colspan="{{ 8 if session.get('role') == 'admin' else 7 }}"
+                class="text-center text-muted py-4">No recordings yet.</td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
@@ -124,6 +157,36 @@
     videoEl.src = '';
     videoEl.load();
   });
+
+  const selectAll = document.getElementById('selectAllRecordings');
+  const batchBtn = document.getElementById('batchDeleteBtn');
+  const checkboxes = Array.from(document.querySelectorAll('.recording-checkbox'));
+
+  function updateBatchState() {
+    if (!batchBtn) return;
+    const checkedCount = checkboxes.filter(cb => cb.checked).length;
+    batchBtn.disabled = checkedCount === 0;
+    batchBtn.innerHTML = checkedCount
+      ? `<i class="bi bi-trash me-1"></i>Delete ${checkedCount} Selected`
+      : '<i class="bi bi-trash me-1"></i>Delete Selected';
+    if (selectAll) {
+      selectAll.checked = checkedCount > 0 && checkedCount === checkboxes.length;
+      selectAll.indeterminate = checkedCount > 0 && checkedCount < checkboxes.length;
+    }
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function () {
+      checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
+      updateBatchState();
+    });
+  }
+
+  checkboxes.forEach(cb => cb.addEventListener('change', updateBatchState));
+  window.confirmBatchDelete = function () {
+    const checkedCount = checkboxes.filter(cb => cb.checked).length;
+    return checkedCount > 0 && confirm(`Delete ${checkedCount} selected recording(s)?`);
+  };
 })();
 </script>
 {% endblock %}

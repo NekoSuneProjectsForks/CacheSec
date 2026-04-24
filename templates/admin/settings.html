@@ -31,6 +31,120 @@
           </div>
 
           <div class="col-md-6">
+            <label class="form-label">Camera Source</label>
+            <select name="camera_preferred_source"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set source = settings.camera_preferred_source or 'webcam' %}
+              <option value="webcam" {{ 'selected' if source == 'webcam' else '' }}>USB / Pi Camera</option>
+              <option value="ip" {{ 'selected' if source == 'ip' else '' }}>IP Camera / RTSP</option>
+              <option value="kinect" {{ 'selected' if source == 'kinect' else '' }}>Kinect</option>
+            </select>
+            <div class="form-text text-muted">
+              Restart CacheSec after changing camera source settings.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">IP Camera URL</label>
+            <input type="url" name="ip_camera_url"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="rtsp://user:pass@192.168.1.50:554/stream1"
+                   value="{{ settings.ip_camera_url or '' }}">
+            <div class="form-text text-muted">
+              Supports RTSP, HTTP MJPEG, and HTTP video URLs that OpenCV/ffmpeg can open.
+            </div>
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">Extra Live IP Cameras</label>
+            <textarea name="ip_camera_urls"
+                      class="form-control bg-secondary border-secondary text-light"
+                      rows="4"
+                      placeholder="Front Door|rtsp://user:pass@192.168.1.51:554/stream1&#10;Beach|https://camera.example.com/live.m3u8|referer=https://camera.example.com">{{ settings.ip_camera_urls or '' }}</textarea>
+            <div class="form-text text-muted">
+              Optional live-view cameras, one per line or comma-separated. Supports RTSP,
+              HLS .m3u8, MJPEG/HTTP video, and periodic image snapshot URLs. You can append
+              |referer=..., |origin=..., or |user_agent=... for sites that block plain requests.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">IP Camera RTSP Transport</label>
+            <select name="ip_camera_rtsp_transport"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set transport = settings.ip_camera_rtsp_transport or 'tcp' %}
+              <option value="tcp" {{ 'selected' if transport == 'tcp' else '' }}>TCP (recommended Wi-Fi)</option>
+              <option value="udp" {{ 'selected' if transport == 'udp' else '' }}>UDP</option>
+              <option value="udp_multicast" {{ 'selected' if transport == 'udp_multicast' else '' }}>UDP multicast</option>
+              <option value="http" {{ 'selected' if transport == 'http' else '' }}>HTTP tunnel</option>
+            </select>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">IP Camera ONVIF Night Vision</label>
+            <select name="ip_camera_onvif_night_mode"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set onvif_mode = settings.ip_camera_onvif_night_mode or 'disabled' %}
+              <option value="disabled" {{ 'selected' if onvif_mode == 'disabled' else '' }}>Disabled</option>
+              <option value="detect" {{ 'selected' if onvif_mode == 'detect' else '' }}>Detect darkness and switch IR-cut</option>
+            </select>
+            <div class="form-text text-muted">
+              Uses ONVIF Imaging <code>IrCutFilter</code> control for the primary IP camera. Requires an ONVIF-capable camera and the <code>onvif-zeep</code> package.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">IP Camera ONVIF Host</label>
+            <input type="text" name="ip_camera_onvif_host"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="192.168.1.50"
+                   value="{{ settings.ip_camera_onvif_host or '' }}">
+            <div class="form-text text-muted">
+              Optional. Leave blank to reuse the hostname from the primary IP camera URL.
+            </div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">IP Camera ONVIF Port</label>
+            <input type="number" step="1" min="0" max="65535" name="ip_camera_onvif_port"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="80"
+                   value="{{ '' if (settings.ip_camera_onvif_port or '') in ['0', ''] else settings.ip_camera_onvif_port }}">
+            <div class="form-text text-muted">
+              Optional. `0` or blank uses the HTTP(S) port from the stream URL when available, otherwise `80`.
+            </div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">IP Camera ONVIF Username</label>
+            <input type="text" name="ip_camera_onvif_username"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="admin"
+                   value="{{ settings.ip_camera_onvif_username or '' }}">
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">IP Camera ONVIF Password</label>
+            <input type="password" name="ip_camera_onvif_password"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.ip_camera_onvif_password or '' }}">
+            <div class="form-text text-muted">
+              Leave username/password blank to reuse credentials embedded in the primary IP camera URL.
+            </div>
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">IP Camera ONVIF WSDL Directory</label>
+            <input type="text" name="ip_camera_onvif_wsdl_dir"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="/venv/lib/python3.11/site-packages/wsdl"
+                   value="{{ settings.ip_camera_onvif_wsdl_dir or '' }}">
+            <div class="form-text text-muted">
+              Advanced override. Leave blank to auto-detect WSDL files installed by <code>onvif-zeep</code>.
+            </div>
+          </div>
+
+          <div class="col-md-6">
             <label class="form-label">Unknown Cooldown (seconds)</label>
             <input type="number" step="1" min="1" max="120" name="unknown_cooldown_seconds"
                    class="form-control bg-secondary border-secondary text-light"
@@ -56,6 +170,38 @@
                    value="{{ settings.max_recording_seconds or '5400' }}">
           </div>
 
+          <div class="col-12">
+            <input type="hidden" name="save_recordings_locally" value="false">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="save_recordings_locally"
+                     name="save_recordings_locally" value="true"
+                     {{ 'checked' if settings.save_recordings_locally != 'false' else '' }}>
+              <label class="form-check-label" for="save_recordings_locally">
+                Save completed videos locally
+              </label>
+            </div>
+            <div class="form-text text-muted">
+              Turn this off to upload finished clips to Discord only, then delete the local video file.
+              A Discord webhook URL is required or clips will be discarded after recording.
+            </div>
+          </div>
+
+          <div class="col-12">
+            <input type="hidden" name="record_audio_enabled" value="false">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="record_audio_enabled"
+                     name="record_audio_enabled" value="true"
+                     {{ 'checked' if settings.record_audio_enabled == 'true' else '' }}>
+              <label class="form-check-label" for="record_audio_enabled">
+                Capture microphone audio when recording
+              </label>
+            </div>
+            <div class="form-text text-muted">
+              Off by default. When enabled, CacheSec tries IP-camera audio for IP sources,
+              then detected Kinect, webcam, or USB microphones.
+            </div>
+          </div>
+
         </div>
 
         <div class="card-header cs-card-header border-top border-secondary">Discord Webhook</div>
@@ -67,6 +213,9 @@
                    class="form-control bg-secondary border-secondary text-light"
                    placeholder="https://discord.com/api/webhooks/..."
                    value="{{ settings.discord_webhook_url or '' }}">
+            <div class="form-text text-muted">
+              Used for instant unknown alerts and for finished video uploads when local saving is disabled.
+            </div>
           </div>
 
           <div class="col-md-6">
@@ -74,6 +223,23 @@
             <input type="number" step="1" min="10" max="3600" name="discord_cooldown_seconds"
                    class="form-control bg-secondary border-secondary text-light"
                    value="{{ settings.discord_cooldown_seconds or '60' }}">
+          </div>
+
+          <div class="col-md-6 d-flex align-items-end">
+            <div>
+              <input type="hidden" name="discord_mention_everyone" value="false">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="discord_mention_everyone"
+                       name="discord_mention_everyone" value="true"
+                       {{ 'checked' if settings.discord_mention_everyone == 'true' else '' }}>
+                <label class="form-check-label" for="discord_mention_everyone">
+                  Mention @everyone on unknown alerts
+                </label>
+              </div>
+              <div class="form-text text-muted">
+                Off by default to avoid noisy channel-wide pings.
+              </div>
+            </div>
           </div>
 
         </div>

@@ -56,8 +56,21 @@ FRAME_WIDTH: int = _int("FRAME_WIDTH", 640)
 FRAME_HEIGHT: int = _int("FRAME_HEIGHT", 480)
 UNKNOWN_COOLDOWN_SECONDS: int = _int("UNKNOWN_COOLDOWN_SECONDS", 10)
 CAMERA_PREFERRED_SOURCE: str = os.getenv("CAMERA_PREFERRED_SOURCE", "webcam").strip().lower()
-if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect"}:
+if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect", "ip"}:
     CAMERA_PREFERRED_SOURCE = "webcam"
+IP_CAMERA_URL: str = os.getenv("IP_CAMERA_URL", "").strip()
+IP_CAMERA_URLS: str = os.getenv("IP_CAMERA_URLS", "").strip()
+IP_CAMERA_RTSP_TRANSPORT: str = os.getenv("IP_CAMERA_RTSP_TRANSPORT", "tcp").strip().lower()
+if IP_CAMERA_RTSP_TRANSPORT not in {"tcp", "udp", "udp_multicast", "http"}:
+    IP_CAMERA_RTSP_TRANSPORT = "tcp"
+IP_CAMERA_ONVIF_NIGHT_MODE: str = os.getenv("IP_CAMERA_ONVIF_NIGHT_MODE", "disabled").strip().lower()
+if IP_CAMERA_ONVIF_NIGHT_MODE not in {"disabled", "detect"}:
+    IP_CAMERA_ONVIF_NIGHT_MODE = "disabled"
+IP_CAMERA_ONVIF_HOST: str = os.getenv("IP_CAMERA_ONVIF_HOST", "").strip()
+IP_CAMERA_ONVIF_PORT: int = _int("IP_CAMERA_ONVIF_PORT", 0)
+IP_CAMERA_ONVIF_USERNAME: str = os.getenv("IP_CAMERA_ONVIF_USERNAME", "").strip()
+IP_CAMERA_ONVIF_PASSWORD: str = os.getenv("IP_CAMERA_ONVIF_PASSWORD", "")
+IP_CAMERA_ONVIF_WSDL_DIR: str = os.getenv("IP_CAMERA_ONVIF_WSDL_DIR", "").strip()
 
 # ---------------------------------------------------------------------------
 # Recording
@@ -66,12 +79,16 @@ RECORDINGS_DIR: str = os.getenv("RECORDINGS_DIR", str(_BASE_DIR / "recordings"))
 SNAPSHOTS_DIR: str = os.getenv("SNAPSHOTS_DIR", str(_BASE_DIR / "snapshots"))
 MIN_RECORDING_SECONDS: int = _int("MIN_RECORDING_SECONDS", 15)
 MAX_RECORDING_SECONDS: int = _int("MAX_RECORDING_SECONDS", 5400)  # 1h30m
+SAVE_RECORDINGS_LOCALLY: bool = _bool("SAVE_RECORDINGS_LOCALLY", True)
+RECORD_AUDIO_ENABLED: bool = _bool("RECORD_AUDIO_ENABLED", False)
+RECORD_AUDIO_DEVICE: str = os.getenv("RECORD_AUDIO_DEVICE", "auto").strip() or "auto"
 
 # ---------------------------------------------------------------------------
 # Discord
 # ---------------------------------------------------------------------------
 DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "")
 DISCORD_COOLDOWN_SECONDS: int = _int("DISCORD_COOLDOWN_SECONDS", 60)
+DISCORD_MENTION_EVERYONE: bool = _bool("DISCORD_MENTION_EVERYONE", False)
 
 # ---------------------------------------------------------------------------
 # Kinect
