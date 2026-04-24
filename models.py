@@ -222,7 +222,7 @@ def delete_embeddings_for_person(conn: sqlite3.Connection, person_id: int) -> No
 def create_event(conn: sqlite3.Connection, **fields: Any) -> int:
     allowed = {
         "event_type", "person_id", "person_name", "confidence",
-        "snapshot_path", "occurred_at",
+        "snapshot_path", "occurred_at", "notes",
     }
     cols = {k: v for k, v in fields.items() if k in allowed and v is not None}
     col_names = ", ".join(cols)

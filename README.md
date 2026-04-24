@@ -17,6 +17,9 @@ admin dashboard accessible locally or remotely through Cloudflare Tunnel.
 | RBAC | admin / operator / viewer roles |
 | Alerts | Discord webhook with snapshot image attachment and optional video upload |
 | Recording | Auto-start/stop with min/max duration enforcement; local saving and microphone audio are configurable |
+| Multi-camera detection | Extra USB, Kinect, and IP cameras can run the same detection loop as the primary feed |
+| Optional object detection | Detectron2 can detect people, pets/animals, or all COCO objects when installed separately |
+| Motion detection | Frame-difference moving-object detection can be enabled per camera |
 | Sound | GPIO PWM buzzer (access-denied tone on unknown) |
 | Database | SQLite with WAL mode |
 | Deployment | Gunicorn + systemd or Docker + Cloudflare Tunnel |
@@ -87,6 +90,19 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+Optional Detectron2 object detection is not installed by default because PyTorch
+and Detectron2 wheels depend on your CPU/GPU, Python, and CUDA stack. Install a
+matching PyTorch build first, then:
+
+```bash
+pip install -r requirements-detectron2.txt
+```
+
+For Docker builds, set `INSTALL_DETECTRON2=true`. CPU builds use the PyTorch CPU
+wheel index by default. NVIDIA builds can set `TORCH_INDEX_URL` to the CUDA wheel
+index that matches the host driver stack, then use `OBJECT_DETECTION_DEVICE=cuda`.
+GPU video encoding is controlled separately with `VIDEO_ENCODER=h264_nvenc`.
+
 > **Note on InsightFace model download:**  
 > On first run, InsightFace downloads the `buffalo_l` model weights (~300 MB)
 > from a CDN. Ensure your Pi has internet access. Models are cached in
@@ -107,8 +123,17 @@ nano .env
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL |
 | `DISCORD_MENTION_EVERYONE` | Set `true` to include `@everyone` in unknown Discord alerts; defaults to `false` |
 | `CAMERA_PREFERRED_SOURCE` | Use `webcam`, `kinect`, or `ip` |
+| `USB_CAMERA_AUTO_DISCOVER` | Automatically discover `/dev/video*` cameras for grid and detection |
+| `USB_CAMERA_INDICES` | Optional comma-separated extra USB/V4L2 indices to show and detect on |
+| `MULTI_CAMERA_DETECTION_ENABLED` | Set `true` to run detection on auxiliary USB, Kinect, and IP feeds |
 | `IP_CAMERA_URL` | RTSP/HTTP/MJPEG stream URL when using an IP camera |
-| `IP_CAMERA_ONVIF_NIGHT_MODE` | Optional: `detect` makes CacheSec drive the camera's ONVIF `IrCutFilter` based on darkness |
+| `IP_CAMERA_ONVIF_NIGHT_MODE` | Optional: `detect` drives ONVIF `IrCutFilter` from darkness; `force_off` keeps IR-cut on |
+| `NIGHT_VISION_MODE` | Use `force_off` to disable USB software night vision and Kinect IR switching |
+| `OBJECT_DETECTION_BACKEND` | Optional: set `detectron2` after installing `requirements-detectron2.txt` |
+| `OBJECT_DETECTION_MODE` | `person`, `people_pets`, or `all`; default `people_pets` detects people plus COCO animal classes |
+| `OBJECT_DETECTION_DEVICE` | `auto`, `cpu`, or `cuda` |
+| `MOVING_OBJECT_DETECTION_ENABLED` | Optional motion-box detection on all detection feeds |
+| `VIDEO_ENCODER` | `auto`, `libx264`, `h264_nvenc`, `hevc_nvenc`, or `h264_qsv` |
 | `IP_CAMERA_ONVIF_HOST` / `IP_CAMERA_ONVIF_PORT` | Optional ONVIF endpoint override if the control port differs from the stream URL |
 | `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
 | `RECORD_AUDIO_ENABLED` | Optional microphone/IP-camera audio capture for recordings; defaults to `false` |
@@ -339,11 +364,12 @@ The GitHub Actions workflow publishes the image to:
 ghcr.io/<your-github-owner>/cachesec
 ```
 
-It builds two image variants:
+It builds these image variants:
 
 - `:main`, `:latest`, and version tags: default smaller build without Kinect
   packages (`INSTALL_KINECT=false`)
 - `:kinect`: Kinect-enabled build (`INSTALL_KINECT=true`)
+- `:detectron2`: Detectron2 CPU object-detection build without Kinect
 
 It runs on pushes to `main`/`master`, version tags like `v1.0.0`, and manual
 dispatches. Pull requests build the image without pushing it.

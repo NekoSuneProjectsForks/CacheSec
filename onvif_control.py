@@ -125,15 +125,23 @@ class OnvifNightVisionController:
         self._ready_logged = False
 
     def enabled(self) -> bool:
+        return self.settings.mode in {"detect", "force_off"}
+
+    def detects_darkness(self) -> bool:
         return self.settings.mode == "detect"
 
     def initial_state(self) -> bool | None:
         if not self.enabled():
             return None
+        if self.settings.mode == "force_off":
+            self.set_night_vision(False)
+            return False
         return self._read_current_state()
 
     def set_night_vision(self, active: bool) -> bool:
         if not self.enabled():
+            return False
+        if self.settings.mode == "force_off" and active:
             return False
 
         desired_mode = "OFF" if active else "ON"
@@ -327,4 +335,3 @@ class OnvifNightVisionController:
         if rendered != self._last_error:
             logger.warning("%s", rendered)
             self._last_error = rendered
-

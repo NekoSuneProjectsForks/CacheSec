@@ -769,7 +769,12 @@ def settings():
     _setting_keys = [
         "recognition_threshold",
         "frame_skip",
+        "night_vision_mode",
         "camera_preferred_source",
+        "usb_camera_indices",
+        "usb_camera_auto_discover",
+        "usb_camera_scan_limit",
+        "multi_camera_detection_enabled",
         "ip_camera_url",
         "ip_camera_urls",
         "ip_camera_rtsp_transport",
@@ -780,11 +785,21 @@ def settings():
         "ip_camera_onvif_password",
         "ip_camera_onvif_wsdl_dir",
         "unknown_cooldown_seconds",
+        "object_detection_backend",
+        "object_detection_mode",
+        "object_detection_threshold",
+        "object_detection_device",
+        "moving_object_detection_enabled",
+        "moving_object_min_area",
+        "moving_object_threshold",
         "min_recording_seconds",
         "max_recording_seconds",
         "record_all_mode",
         "save_recordings_locally",
         "record_audio_enabled",
+        "video_encoder",
+        "video_encoder_preset",
+        "video_encoder_quality",
         "discord_cooldown_seconds",
         "discord_mention_everyone",
         "discord_webhook_url",
@@ -792,14 +807,50 @@ def settings():
     ]
 
     if request.method == "POST":
+        before = {k: get_setting(k) for k in _setting_keys}
         for key in _setting_keys:
             values = request.form.getlist(key)
             val = values[-1].strip() if values else ""
             set_setting(key, val, user_id=session["user_id"])
+        after = {k: get_setting(k) for k in _setting_keys}
+
+        reload_keys = {
+            "frame_skip",
+            "night_vision_mode",
+            "camera_preferred_source",
+            "usb_camera_indices",
+            "usb_camera_auto_discover",
+            "usb_camera_scan_limit",
+            "multi_camera_detection_enabled",
+            "ip_camera_url",
+            "ip_camera_urls",
+            "ip_camera_rtsp_transport",
+            "ip_camera_onvif_night_mode",
+            "ip_camera_onvif_host",
+            "ip_camera_onvif_port",
+            "ip_camera_onvif_username",
+            "ip_camera_onvif_password",
+            "ip_camera_onvif_wsdl_dir",
+            "object_detection_backend",
+            "object_detection_mode",
+            "object_detection_threshold",
+            "object_detection_device",
+            "moving_object_detection_enabled",
+            "moving_object_min_area",
+            "moving_object_threshold",
+        }
+        changed_keys = {k for k in _setting_keys if before.get(k) != after.get(k)}
+        if changed_keys & reload_keys:
+            try:
+                from camera import get_camera_loop
+
+                get_camera_loop().restart_async()
+            except Exception as exc:
+                logger.warning("Camera runtime reload failed after settings change: %s", exc)
 
         audit("SETTINGS_CHANGED", user_id=session["user_id"],
               username=session["username"], ip_address=get_client_ip())
-        flash("Settings saved.", "success")
+        flash("Settings saved. Camera changes are applied in-process without restarting Docker.", "success")
         return redirect(url_for("admin.settings"))
 
     current = {k: get_setting(k) for k in _setting_keys}
@@ -874,6 +925,8 @@ def api_status():
         "is_recording":        rec.is_recording,
         "recording_duration":  rec.duration_seconds,
         "record_all_mode":     (get_setting("record_all_mode", "false").strip().lower() == "true"),
+        "multi_camera_detection": cam.get("multi_camera_detection", False),
+        "multi_camera_sources": cam.get("multi_camera_sources", 0),
         "unknown_today":       unkn,
         "recognized_today":    recg,
         "enrolled_count":      len(models.get_all_enrolled(db)),
@@ -930,6 +983,11 @@ def api_sensors():
         "kinect_motor_present": kinect_parts["motor"],
         "kinect_fully_powered": all(kinect_parts.values()),
         "record_all_mode": (get_setting("record_all_mode", "false").strip().lower() == "true"),
+        "multi_camera_detection": cam.get("multi_camera_detection", False),
+        "multi_camera_sources": cam.get("multi_camera_sources", 0),
+        "object_detection_backend": get_setting("object_detection_backend", config.OBJECT_DETECTION_BACKEND),
+        "object_detection_mode": get_setting("object_detection_mode", config.OBJECT_DETECTION_MODE),
+        "moving_object_detection": get_setting("moving_object_detection_enabled", "false").strip().lower() == "true",
         "ip_primary_configured": bool(get_setting("ip_camera_url", config.IP_CAMERA_URL).strip()),
         "ip_extra_count": len(_split_nonempty(get_setting("ip_camera_urls", config.IP_CAMERA_URLS))),
         "live_source_count": len(live_sources),

@@ -1,6 +1,8 @@
 FROM python:3.11-slim
 
 ARG INSTALL_KINECT=true
+ARG INSTALL_DETECTRON2=false
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -34,6 +36,13 @@ RUN set -eux; \
         libxext6 \
         tini \
     "; \
+    if [ "$INSTALL_DETECTRON2" = "true" ]; then \
+        packages="$packages \
+            build-essential \
+            git \
+            ninja-build \
+        "; \
+    fi; \
     if [ "$INSTALL_KINECT" = "true" ]; then \
         packages="$packages \
             alsa-utils \
@@ -56,12 +65,16 @@ RUN set -eux; \
         /data/uploads/faces \
         /data/.cachesec/models
 
-COPY requirements.txt requirements-kinect.txt ./
+COPY requirements.txt requirements-kinect.txt requirements-detectron2.txt ./
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt \
     && if [ "$INSTALL_KINECT" = "true" ]; then \
         python -m pip install -r requirements-kinect.txt; \
+    fi \
+    && if [ "$INSTALL_DETECTRON2" = "true" ]; then \
+        python -m pip install torch torchvision --index-url "$TORCH_INDEX_URL"; \
+        python -m pip install -r requirements-detectron2.txt; \
     fi
 
 COPY . .
