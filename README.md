@@ -339,6 +339,12 @@ The GitHub Actions workflow publishes the image to:
 ghcr.io/<your-github-owner>/cachesec
 ```
 
+It builds two image variants:
+
+- `:main`, `:latest`, and version tags: default smaller build without Kinect
+  packages (`INSTALL_KINECT=false`)
+- `:kinect`: Kinect-enabled build (`INSTALL_KINECT=true`)
+
 It runs on pushes to `main`/`master`, version tags like `v1.0.0`, and manual
 dispatches. Pull requests build the image without pushing it.
 

@@ -1,7 +1,7 @@
 services:
   cachesec:
     container_name: cachesec
-    image: ghcr.io/nekosuneprojectsforks/cachesec:main
+    image: ${CACHESEC_IMAGE:-cachesec:kinect}
     restart: unless-stopped
     ports:
       - "${CACHESEC_BIND_PORT:-5000}:5000"
@@ -20,7 +20,11 @@ services:
       HOME: /data
     volumes:
       - cachesec-data:/data
+      # Required for Kinect v1 / OpenKinect USB access.
+      # - /dev/bus/usb:/dev/bus/usb
     stop_grace_period: 30s
+    # Required for Kinect v1 / OpenKinect USB access.
+    # privileged: true
     # Uncomment these if you want direct host hardware access from the container.
     # Set CACHESEC_VIDEO_DEVICE to the host V4L2 node if it is not /dev/video0
     # (common on Raspberry Pi/libcamera systems). The app can keep CAMERA_INDEX=0
@@ -28,6 +32,7 @@ services:
     # devices:
     #   - ${CACHESEC_VIDEO_DEVICE:-/dev/video0}:/dev/video0
     #   - ${CACHESEC_GPIO_DEVICE:-/dev/gpiochip0}:/dev/gpiochip0
+    #   - /dev/snd:/dev/snd
 
 volumes:
   cachesec-data:
