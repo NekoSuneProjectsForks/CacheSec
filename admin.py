@@ -58,6 +58,12 @@ logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__)
 
+
+def _storage_disk_path() -> str:
+    """Pick a local CacheSec storage path for filesystem usage stats."""
+    return config.RECORDINGS_DIR or config.SNAPSHOTS_DIR or config.UPLOAD_FOLDER or "."
+
+
 # ---------------------------------------------------------------------------
 # Dashboard overview
 # ---------------------------------------------------------------------------
@@ -79,7 +85,7 @@ def dashboard():
     rec_state  = get_recorder().get_state()
 
     storage_mb = dir_size_mb(config.RECORDINGS_DIR) + dir_size_mb(config.SNAPSHOTS_DIR)
-    disk_pct   = disk_usage_percent("/")
+    disk_pct   = disk_usage_percent(_storage_disk_path())
 
     return render_template(
         "admin/dashboard.html",
@@ -816,7 +822,7 @@ def health():
 
     cam_status = get_camera_status()
     rec_state  = get_recorder().get_state()
-    disk_pct   = disk_usage_percent("/")
+    disk_pct   = disk_usage_percent(_storage_disk_path())
     storage_mb = dir_size_mb(config.RECORDINGS_DIR) + dir_size_mb(config.SNAPSHOTS_DIR)
 
     return render_template(
@@ -862,7 +868,7 @@ def api_status():
         "unknown_today":       unkn,
         "recognized_today":    recg,
         "enrolled_count":      len(models.get_all_enrolled(db)),
-        "disk_pct":            disk_usage_percent("/"),
+        "disk_pct":            disk_usage_percent(_storage_disk_path()),
     })
 
 
