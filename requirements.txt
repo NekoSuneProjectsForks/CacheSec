@@ -42,10 +42,6 @@ numpy>=1.24.0
 # ---- Computer vision ----
 opencv-python-headless>=4.10.0
 
-# ---- Kinect v1 / OpenKinect ----
-# Requires libfreenect-dev and libusb-1.0-0-dev at image/host build time.
-freenect==0.1.0
-
 # ---- GPIO / sound ----
 gpiozero==2.0.1
 # RPi.GPIO is the gpiozero backend on Pi OS; usually pre-installed.

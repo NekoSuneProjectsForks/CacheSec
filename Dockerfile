@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+ARG INSTALL_KINECT=true
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -14,30 +16,53 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
+RUN set -eux; \
+    if [ "$INSTALL_KINECT" = "true" ]; then \
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+            sed -i -E 's/^Components: .*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; \
+        elif [ -f /etc/apt/sources.list ]; then \
+            sed -i -E 's/ main($| )/ main contrib non-free non-free-firmware /' /etc/apt/sources.list; \
+        fi; \
+    fi; \
+    apt-get update; \
+    packages="\
         ffmpeg \
-        libfreenect-dev \
         libgl1 \
         libglib2.0-0 \
         libgomp1 \
-        libusb-1.0-0-dev \
         libsm6 \
         libxext6 \
         tini \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p \
+    "; \
+    if [ "$INSTALL_KINECT" = "true" ]; then \
+        packages="$packages \
+            alsa-utils \
+            build-essential \
+            freenect \
+            kinect-audio-setup \
+            libfreenect-bin \
+            libfreenect-dev \
+            libfreenect0.5 \
+            libusb-1.0-0 \
+            libusb-1.0-0-dev \
+        "; \
+    fi; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p \
         /data/logs \
         /data/recordings \
         /data/snapshots \
         /data/uploads/faces \
         /data/.cachesec/models
 
-COPY requirements.txt ./
+COPY requirements.txt requirements-kinect.txt ./
 
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+    && python -m pip install -r requirements.txt \
+    && if [ "$INSTALL_KINECT" = "true" ]; then \
+        python -m pip install -r requirements-kinect.txt; \
+    fi
 
 COPY . .
 

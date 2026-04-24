@@ -1,0 +1,9 @@
+# =============================================================================
+# Optional Kinect v1 / OpenKinect dependencies
+# =============================================================================
+# Requires native build/runtime packages from the Dockerfile Kinect branch:
+#   alsa-utils build-essential freenect kinect-audio-setup libfreenect-bin
+#   libfreenect-dev libfreenect0.5 libusb-1.0-0 libusb-1.0-0-dev
+# The Dockerfile installs this file when INSTALL_KINECT=true.
+
+freenect==0.1.0

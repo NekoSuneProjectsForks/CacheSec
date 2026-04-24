@@ -288,6 +288,9 @@ privileged: true
 volumes:
   - ./data:/data
   - /dev/bus/usb:/dev/bus/usb
+# Optional if you want ALSA microphone/audio capture from the host:
+devices:
+  - /dev/snd:/dev/snd
 ```
 
 Set the camera source to Kinect:
@@ -304,12 +307,28 @@ camera source in the admin Settings page, or remove `/data/cachesec.db` if you
 are intentionally resetting the deployment.
 
 The container image must include `libfreenect` and the Python `freenect`
-package. If you are using a published GHCR image, rebuild/publish it after
-Dockerfile changes, or build locally with:
+package. The Dockerfile installs Kinect support by default with
+`INSTALL_KINECT=true`. CacheSec still auto-detects the device at runtime, so the
+image can run without a Kinect attached.
+
+The Kinect-enabled Docker build also installs `alsa-utils`,
+`kinect-audio-setup`, `freenect`, `libfreenect-bin`, `libfreenect-dev`,
+`libfreenect0.5`, and libusb runtime/build packages. `kinect-audio-setup` is a
+Debian `contrib` package and downloads Microsoft's non-redistributable Kinect
+audio firmware during package setup, so the image build needs network access.
+
+If you are using a published GHCR image, rebuild/publish it after Dockerfile
+changes, or build locally with:
 
 ```bash
 docker compose build --no-cache
 docker compose up -d
+```
+
+To build a smaller image without Kinect support:
+
+```bash
+docker compose build --build-arg INSTALL_KINECT=false
 ```
 
 ### GitHub Container Registry
