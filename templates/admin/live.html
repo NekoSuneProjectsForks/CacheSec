@@ -10,6 +10,12 @@
   'detail': 'detection process',
   'active': True
 }] %}
+{% set ns = namespace(primary=None, webcam=None, kinect=None) %}
+{% for source in sources %}
+  {% if source.id == 'primary' %}{% set ns.primary = source %}{% endif %}
+  {% if source.id == 'webcam' %}{% set ns.webcam = source %}{% endif %}
+  {% if source.id == 'kinect' %}{% set ns.kinect = source %}{% endif %}
+{% endfor %}
 <div class="row justify-content-center">
   <div class="col-lg-10">
     <div class="card cs-card">
@@ -39,6 +45,8 @@
                   data-detail="{{ source.detail }}">
             {% if source.kind == 'webcam' %}
               <i class="bi bi-webcam me-1"></i>
+            {% elif source.kind == 'kinect' %}
+              <i class="bi bi-badge-3d me-1"></i>
             {% elif source.kind == 'ip' %}
               <i class="bi bi-router me-1"></i>
             {% else %}
@@ -61,6 +69,70 @@
     </div>
   </div>
 </div>
+
+{% if ns.kinect and (ns.webcam or ns.primary) %}
+<div class="row justify-content-center mt-3">
+  <div class="col-lg-10">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header d-flex justify-content-between align-items-center">
+        <div>
+          <i class="bi bi-grid-1x2-fill me-2"></i>Multi-Camera View
+        </div>
+        <span class="badge bg-success blink-dot"><i class="bi bi-circle-fill me-1"></i>LIVE</span>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          {% set feed_a = ns.webcam or ns.primary %}
+          {% if feed_a %}
+          <div class="col-12 col-lg-6">
+            <div class="small text-muted mb-2">{{ feed_a.label }}</div>
+            <div class="bg-black rounded overflow-hidden text-center">
+              <img src="{{ url_for('admin.live_stream', source_id=feed_a.id) }}"
+                   class="img-fluid" style="width:100%; max-height:40vh; object-fit:contain;"
+                   alt="{{ feed_a.label }}">
+            </div>
+          </div>
+          {% endif %}
+          <div class="col-12 col-lg-6">
+            <div class="small text-muted mb-2">{{ ns.kinect.label }}</div>
+            <div class="bg-black rounded overflow-hidden text-center">
+              <img src="{{ url_for('admin.live_stream', source_id=ns.kinect.id) }}"
+                   class="img-fluid" style="width:100%; max-height:40vh; object-fit:contain;"
+                   alt="{{ ns.kinect.label }}">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="row justify-content-center mt-3">
+  <div class="col-lg-10">
+    <div class="card cs-card">
+      <div class="card-header cs-card-header">
+        <i class="bi bi-activity me-2"></i>Sensor Status
+      </div>
+      <div class="card-body">
+        <div class="row g-2 small" id="sensor-grid">
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-camera-running" class="badge bg-secondary">camera: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-camera-source" class="badge bg-secondary">source: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-recording" class="badge bg-secondary">recording: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-nightvision" class="badge bg-secondary">night vision: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-sls" class="badge bg-secondary">sls: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-depth" class="badge bg-secondary">depth: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-webcam" class="badge bg-secondary">webcam: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-kinect" class="badge bg-secondary">kinect usb: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-usb-bus" class="badge bg-secondary">usb bus: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-gpio" class="badge bg-secondary">gpio: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-audio" class="badge bg-secondary">audio: ...</span></div>
+          <div class="col-12 col-md-6 col-xl-4"><span id="sensor-ip" class="badge bg-secondary">ip cams: ...</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -72,6 +144,20 @@
   const title = document.getElementById('live-feed-title');
   const detail = document.getElementById('live-feed-detail');
   const sourceButtons = Array.from(document.querySelectorAll('.live-source-btn'));
+  const sensorEls = {
+    cameraRunning: document.getElementById('sensor-camera-running'),
+    cameraSource: document.getElementById('sensor-camera-source'),
+    recording: document.getElementById('sensor-recording'),
+    nightvision: document.getElementById('sensor-nightvision'),
+    sls: document.getElementById('sensor-sls'),
+    depth: document.getElementById('sensor-depth'),
+    webcam: document.getElementById('sensor-webcam'),
+    kinect: document.getElementById('sensor-kinect'),
+    usbBus: document.getElementById('sensor-usb-bus'),
+    gpio: document.getElementById('sensor-gpio'),
+    audio: document.getElementById('sensor-audio'),
+    ip: document.getElementById('sensor-ip'),
+  };
   let activeSourceId = sourceButtons.length ? sourceButtons[0].dataset.sourceId : 'primary';
 
   sourceButtons.forEach((button) => {
@@ -107,6 +193,31 @@
         }
       })
       .catch(() => {});
+
+    fetch('/admin/api/sensors')
+      .then(r => r.json())
+      .then((s) => {
+        setBadge(sensorEls.cameraRunning, `camera: ${s.camera_running ? 'running' : 'stopped'}`, s.camera_running);
+        setBadge(sensorEls.cameraSource, `source: ${s.camera_source || 'unknown'}`, true);
+        setBadge(sensorEls.recording, `recording: ${s.record_all_mode ? 'continuous mode ON' : 'event mode'}`, s.record_all_mode);
+        setBadge(sensorEls.nightvision, `night vision: ${s.night_vision ? 'on' : 'off'}`, s.night_vision);
+        setBadge(sensorEls.sls, `sls: ${s.sls_active ? 'active' : (s.sls_enabled ? 'enabled' : 'off')}`, s.sls_active || s.sls_enabled);
+        setBadge(sensorEls.depth, `depth: ${s.depth_available ? 'available' : 'not available'}`, s.depth_available);
+        setBadge(sensorEls.webcam, `webcam ${s.webcam_device}: ${s.webcam_present ? 'present' : 'missing'}`, s.webcam_present);
+        setBadge(sensorEls.kinect, `kinect usb: ${s.kinect_fully_powered ? 'camera+audio+motor' : 'partial/offline'}`, s.kinect_fully_powered);
+        setBadge(sensorEls.usbBus, `usb bus passthrough: ${s.usb_bus_present ? 'ok' : 'missing'}`, s.usb_bus_present);
+        setBadge(sensorEls.gpio, `gpio: ${s.gpio_present ? 'present' : 'missing'}`, s.gpio_present);
+        setBadge(sensorEls.audio, `audio devices: ${s.audio_present ? 'present' : 'missing'}`, s.audio_present);
+        setBadge(sensorEls.ip, `ip cams: primary ${s.ip_primary_configured ? 'set' : 'unset'}, extra ${s.ip_extra_count || 0}`, s.ip_primary_configured || (s.ip_extra_count || 0) > 0);
+      })
+      .catch(() => {});
+  }
+
+  function setBadge(el, text, good) {
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('bg-secondary', 'bg-success', 'bg-warning');
+    el.classList.add(good ? 'bg-success' : 'bg-warning');
   }
 
   pollStatus();

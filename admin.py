@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -781,6 +782,7 @@ def settings():
         "unknown_cooldown_seconds",
         "min_recording_seconds",
         "max_recording_seconds",
+        "record_all_mode",
         "save_recordings_locally",
         "record_audio_enabled",
         "discord_cooldown_seconds",
@@ -871,11 +873,77 @@ def api_status():
         "depth":               cam.get("depth", False),
         "is_recording":        rec.is_recording,
         "recording_duration":  rec.duration_seconds,
+        "record_all_mode":     (get_setting("record_all_mode", "false").strip().lower() == "true"),
         "unknown_today":       unkn,
         "recognized_today":    recg,
         "enrolled_count":      len(models.get_all_enrolled(db)),
         "disk_pct":            disk_usage_percent(_storage_disk_path()),
     })
+
+
+@admin_bp.route("/api/sensors")
+@login_required
+def api_sensors():
+    from camera import get_camera_status, get_live_sources
+
+    cam = get_camera_status()
+    live_sources = get_live_sources()
+
+    webcam_device = f"/dev/video{config.CAMERA_INDEX}"
+    webcam_present = Path(webcam_device).exists()
+    gpio_present = Path("/dev/gpiochip0").exists()
+    audio_present = Path("/dev/snd").exists()
+    usb_bus_present = Path("/dev/bus/usb").exists()
+
+    kinect_parts = {"camera": False, "audio": False, "motor": False}
+    try:
+        out = subprocess.run(
+            ["lsusb"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        ).stdout
+        text = out.lower()
+        kinect_parts["camera"] = "045e:02ae" in text
+        kinect_parts["audio"] = "045e:02ad" in text
+        kinect_parts["motor"] = "045e:02b0" in text
+    except Exception:
+        pass
+
+    return jsonify({
+        "camera_running": cam.get("running", False),
+        "camera_error": cam.get("error", ""),
+        "camera_source": cam.get("source", "webcam"),
+        "night_vision": cam.get("night_vision", False),
+        "sls_enabled": cam.get("sls_enabled", False),
+        "sls_active": cam.get("sls_active", False),
+        "depth_available": cam.get("depth", False),
+        "webcam_device": webcam_device,
+        "webcam_present": webcam_present,
+        "gpio_present": gpio_present,
+        "audio_present": audio_present,
+        "usb_bus_present": usb_bus_present,
+        "kinect_enabled": bool(config.KINECT_ENABLED),
+        "kinect_camera_present": kinect_parts["camera"],
+        "kinect_audio_present": kinect_parts["audio"],
+        "kinect_motor_present": kinect_parts["motor"],
+        "kinect_fully_powered": all(kinect_parts.values()),
+        "record_all_mode": (get_setting("record_all_mode", "false").strip().lower() == "true"),
+        "ip_primary_configured": bool(get_setting("ip_camera_url", config.IP_CAMERA_URL).strip()),
+        "ip_extra_count": len(_split_nonempty(get_setting("ip_camera_urls", config.IP_CAMERA_URLS))),
+        "live_source_count": len(live_sources),
+        "live_sources": live_sources,
+    })
+
+
+def _split_nonempty(raw: str) -> list[str]:
+    values: list[str] = []
+    for chunk in (raw or "").replace(",", "\n").splitlines():
+        entry = chunk.strip()
+        if entry and not entry.startswith("#"):
+            values.append(entry)
+    return values
 
 
 # ---------------------------------------------------------------------------

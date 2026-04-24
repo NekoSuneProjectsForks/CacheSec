@@ -171,6 +171,21 @@
           </div>
 
           <div class="col-12">
+            <input type="hidden" name="record_all_mode" value="false">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="record_all_mode"
+                     name="record_all_mode" value="true"
+                     {{ 'checked' if settings.record_all_mode == 'true' else '' }}>
+              <label class="form-check-label" for="record_all_mode">
+                Record continuously (all activity, not only unknown alerts)
+              </label>
+            </div>
+            <div class="form-text text-muted">
+              When enabled, CacheSec keeps recording the primary detection feed continuously and rolls clips based on the max recording duration.
+            </div>
+          </div>
+
+          <div class="col-12">
             <input type="hidden" name="save_recordings_locally" value="false">
             <div class="form-check form-switch">
               <input class="form-check-input" type="checkbox" id="save_recordings_locally"

@@ -109,6 +109,23 @@ def get_live_sources() -> list[dict]:
             "detail": f"index {config.CAMERA_INDEX}",
         })
 
+    # Expose Kinect as an explicit live-only source so operators can view
+    # Kinect and webcam side-by-side regardless of which source detection uses.
+    if config.KINECT_ENABLED:
+        try:
+            from kinect import kinect_available
+            has_kinect = kinect_available()
+        except Exception:
+            has_kinect = False
+        if has_kinect:
+            sources.append({
+                "id": "kinect",
+                "label": "Kinect v1",
+                "kind": "kinect",
+                "active": False,
+                "detail": "RGB/IR (hardware)",
+            })
+
     for idx, item in enumerate(_configured_ip_sources(), start=1):
         sources.append({
             "id": f"ip{idx}",
@@ -435,6 +452,9 @@ class CameraLoop:
         tracker        = _UnknownTracker()
         frame_count    = 0
         reconnect_wait = 2
+        record_all_mode = _live_bool_setting("record_all_mode", False)
+        record_all_last_check = time.monotonic()
+        record_all_last_signal = 0.0
 
         _camera_status["running"] = True
         _camera_status["error"]   = ""
@@ -702,6 +722,20 @@ class CameraLoop:
                 # night-vision/SLS-enhanced frames when those modes are active.
                 recorder.push_frame(display_frame.copy())
 
+                now = time.monotonic()
+                # Keep this setting dynamic so it can be toggled at runtime.
+                if now - record_all_last_check >= 2.0:
+                    new_mode = _live_bool_setting("record_all_mode", False)
+                    if record_all_mode and not new_mode:
+                        recorder.signal_unknown_gone()
+                    record_all_mode = new_mode
+                    record_all_last_check = now
+
+                if record_all_mode and (now - record_all_last_signal) >= 1.0:
+                    # Continuous recording mode. None means "no specific event id".
+                    recorder.signal_unknown_visible(None)
+                    record_all_last_signal = now
+
                 # Run detection every FRAME_SKIP frames
                 if frame_count % max(1, config.FRAME_SKIP) != 0:
                     _set_latest_jpeg(display_frame)
@@ -714,7 +748,7 @@ class CameraLoop:
                 faces: list[DetectedFace] = recognizer.detect(frame)
 
                 if not faces:
-                    if tracker.active:
+                    if tracker.active and not record_all_mode:
                         recorder.signal_unknown_gone()
                         tracker.reset()
                     _set_latest_jpeg(display_frame)
@@ -770,7 +804,7 @@ class CameraLoop:
                             # Cancel any pending unknown tracker — this is a known person
                             if tracker.active or tracker.confirming:
                                 logger.info("Known person recognised — cancelling unknown tracker")
-                                if tracker.active:
+                                if tracker.active and not record_all_mode:
                                     recorder.signal_unknown_gone()
                                 tracker.reset()
                         else:
@@ -812,7 +846,7 @@ class CameraLoop:
                                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                                         0.7, (0, 200, 255), 2)
                 else:
-                    if tracker.active:
+                    if tracker.active and not record_all_mode:
                         recorder.signal_unknown_gone()
                         tracker.reset()
                     elif tracker.confirming:
@@ -885,6 +919,11 @@ def _live_int_setting(key: str, default: int = 0) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _live_bool_setting(key: str, default: bool = False) -> bool:
+    raw = _live_setting(key, "true" if default else "false")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _live_camera_preferred_source() -> str:
@@ -1384,6 +1423,10 @@ def generate_mjpeg(source_id: str = "primary"):
         yield from _generate_capture_mjpeg(config.CAMERA_INDEX, label="USB webcam")
         return
 
+    if source_id == "kinect":
+        yield from _generate_kinect_mjpeg()
+        return
+
     if source_id.startswith("ip"):
         try:
             idx = int(source_id[2:]) - 1
@@ -1400,6 +1443,36 @@ def generate_mjpeg(source_id: str = "primary"):
             return
 
     yield from _generate_error_mjpeg()
+
+
+def _generate_kinect_mjpeg():
+    try:
+        from kinect import get_kinect, kinect_available
+    except Exception:
+        logger.warning("Kinect module unavailable for live stream")
+        yield from _generate_error_mjpeg()
+        return
+
+    if not kinect_available():
+        logger.warning("Kinect live feed requested but Kinect is not available")
+        yield from _generate_error_mjpeg()
+        return
+
+    kinect = get_kinect()
+    if not kinect.available and not kinect.start():
+        logger.warning("Kinect live feed could not start: %s", kinect.error)
+        yield from _generate_error_mjpeg()
+        return
+
+    while True:
+        frame = kinect.read_frame()
+        if frame is None:
+            time.sleep(0.05)
+            continue
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+        time.sleep(0.03)
 
 
 def _generate_ip_mjpeg(

@@ -95,7 +95,7 @@ class Recorder:
     # Public API
     # ------------------------------------------------------------------
 
-    def signal_unknown_visible(self, event_id: int) -> None:
+    def signal_unknown_visible(self, event_id: int | None) -> None:
         self._cmd_q.put(("visible", event_id))
 
     def signal_unknown_gone(self) -> None:
@@ -151,7 +151,7 @@ class Recorder:
                     self._last_visible_time = time.monotonic()
                     if not self._is_recording:
                         self._start_recording(arg)
-                    elif self._event_id != arg:
+                    elif arg is not None and self._event_id != arg:
                         with self._state_lock:
                             self._event_id = arg
 
@@ -217,7 +217,7 @@ class Recorder:
     # Recording helpers
     # ------------------------------------------------------------------
 
-    def _start_recording(self, event_id: int) -> None:
+    def _start_recording(self, event_id: int | None) -> None:
         Path(config.RECORDINGS_DIR).mkdir(parents=True, exist_ok=True)
         ts          = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         mp4_fname   = f"unknown_{ts}.mp4"
@@ -260,8 +260,8 @@ class Recorder:
             self._last_frame_time   = 0.0
 
         logger.info(
-            "Recording started (MJPEG/AVI): %s  event=%d  save_locally=%s  audio=%s",
-            avi_path, event_id, save_locally, "pending" if record_audio else "off",
+            "Recording started (MJPEG/AVI): %s  event=%s  save_locally=%s  audio=%s",
+            avi_path, str(event_id), save_locally, "pending" if record_audio else "off",
         )
 
         started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

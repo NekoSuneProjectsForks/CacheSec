@@ -75,4 +75,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
 
 ENTRYPOINT ["tini", "--"]
 
-CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "--timeout", "120", "app:app"]
+CMD ["gunicorn", "-w", "1", "-k", "gthread", "--threads", "8", "-b", "0.0.0.0:5000", "--timeout", "0", "--graceful-timeout", "30", "--keep-alive", "5", "app:app"]
