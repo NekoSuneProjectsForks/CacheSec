@@ -1,0 +1,8 @@
+# Optional Detectron2 object-detection backend.
+#
+# Install PyTorch first for your platform/CUDA/CPU build, then install this file:
+#   pip install --no-build-isolation -r requirements-detectron2.txt
+#
+# Detectron2 does not publish a universal wheel for every Python, CUDA, and
+# CPU architecture combination, so CacheSec keeps it out of requirements.txt.
+git+https://github.com/facebookresearch/detectron2.git

@@ -69,17 +69,22 @@ except ImportError:
                    "Install: sudo apt install libfreenect-dev && pip install freenect")
 
 
-def kinect_available() -> bool:
-    """True if freenect is installed AND a fully-powered Kinect is connected."""
+def kinect_count() -> int:
+    """Return the number of Kinect devices libfreenect can see."""
     if not _FREENECT_AVAILABLE or _fn is None:
-        return False
+        return 0
     try:
         ctx = _fn.init()
         n   = _fn.num_devices(ctx)
         _fn.shutdown(ctx)
-        return n > 0
+        return int(n)
     except Exception:
-        return False
+        return 0
+
+
+def kinect_available(index: int = 0) -> bool:
+    """True if freenect is installed and the requested Kinect is connected."""
+    return kinect_count() > max(0, int(index))
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +153,8 @@ class KinectSource:
     TILT_MIN = -27
     TILT_MAX =  27
 
-    def __init__(self):
+    def __init__(self, index: int = 0):
+        self.index       = max(0, int(index))
         self._store      = _FrameStore()
         self._mode       = "rgb"
         self._mode_lock  = threading.Lock()
@@ -183,8 +189,8 @@ class KinectSource:
         if not _FREENECT_AVAILABLE:
             self._error = "freenect not installed"
             return False
-        if not kinect_available():
-            self._error = "No Kinect detected — check USB and 12V power supply"
+        if not kinect_available(self.index):
+            self._error = f"No Kinect #{self.index + 1} detected - check USB and 12V power supply"
             logger.warning("KinectSource: %s", self._error)
             return False
 
@@ -209,7 +215,7 @@ class KinectSource:
         deadline = time.monotonic() + 4.0
         while time.monotonic() < deadline:
             if self._ready:
-                logger.info("KinectSource ready (mode=%s)", self._mode)
+                logger.info("KinectSource #%d ready (mode=%s)", self.index + 1, self._mode)
                 return True
             time.sleep(0.05)
 
@@ -378,7 +384,7 @@ class KinectSource:
             return
         try:
             ctx = _fn.init()
-            dev = _fn.open_device(ctx, 0)
+            dev = _fn.open_device(ctx, self.index)
             self._motor_ctx = ctx
             self._motor_dev = dev
             _fn.set_led(dev, int(KinectLED.GREEN))
@@ -424,7 +430,7 @@ class KinectSource:
         current_mode  = None
         flush_needed  = 0   # frames to discard after mode switch
 
-        logger.info("Kinect frame loop started")
+        logger.info("Kinect frame loop #%d started", self.index + 1)
 
         while not self._stop_flag.is_set():
             with self._mode_lock:
@@ -456,7 +462,7 @@ class KinectSource:
             # --- Grab video frame ---
             try:
                 fmt  = IR_FMT if current_mode == "ir" else RGB_FMT
-                arr, _ts = _fn.sync_get_video(index=0, format=fmt)
+                arr, _ts = _fn.sync_get_video(index=self.index, format=fmt)
             except Exception as exc:
                 logger.debug("Kinect video grab error: %s", exc)
                 time.sleep(0.05)
@@ -479,13 +485,13 @@ class KinectSource:
 
             # --- Grab depth frame (best-effort, same sync context) ---
             try:
-                depth, _ = _fn.sync_get_depth(index=0, format=DEPTH_FMT)
+                depth, _ = _fn.sync_get_depth(index=self.index, format=DEPTH_FMT)
                 if depth is not None:
                     self._store.set_depth(depth)
             except Exception:
                 pass
 
-        logger.info("Kinect frame loop ended")
+        logger.info("Kinect frame loop #%d ended", self.index + 1)
         self._ready = False
 
 
@@ -493,13 +499,13 @@ class KinectSource:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 
-_kinect: KinectSource | None = None
+_kinects: dict[int, KinectSource] = {}
 _kinect_lock = threading.Lock()
 
 
-def get_kinect() -> KinectSource:
-    global _kinect
+def get_kinect(index: int = 0) -> KinectSource:
     with _kinect_lock:
-        if _kinect is None:
-            _kinect = KinectSource()
-    return _kinect
+        key = max(0, int(index))
+        if key not in _kinects:
+            _kinects[key] = KinectSource(index=key)
+    return _kinects[key]
