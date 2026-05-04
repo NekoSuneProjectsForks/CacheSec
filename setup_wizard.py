@@ -1,24 +1,24 @@
 """
 setup_wizard.py — First-run setup wizard.
 
-State machine:
-    admin       → no users in DB
-    camera      → no primary camera selected yet
-    extras      → primary set, asking if user wants live-only cameras
-    discord     → optional Discord webhook
-    done        → flag setup_complete=true and bounce to dashboard
+Steps:
+    admin   → no users in DB
+    cameras → user adds zero or more cameras (one optionally flagged "detection")
+    discord → optional Discord webhook
+    done    → flag setup_complete=true and bounce to dashboard
 
-Validation: each step writes to the DB only after type-specific fields pass
-validation, so a half-finished form never leaves the DB in a broken state.
-A self-heal in /setup/ flips setup_complete=true if every step's data is
-present but the flag never landed.
+Cameras are accumulated in the `setup_cameras` JSON blob during the wizard.
+On completion we expand them into the existing settings keys
+(`camera_preferred_source`, `tapo_*`, `ip_camera_url`, `ip_camera_urls`,
+`camera_index`) so the rest of the app keeps working unchanged.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-from urllib.parse import quote
+import uuid
 
 from flask import (
     Blueprint, render_template, redirect, url_for, request,
@@ -49,19 +49,13 @@ def setup_complete() -> bool:
 
 def _has_users() -> bool:
     try:
-        db = get_db()
-        return bool(models.get_all_users(db))
+        return bool(models.get_all_users(get_db()))
     except Exception:
         return False
 
 
-def _has_primary_camera() -> bool:
-    return bool(get_setting("camera_preferred_source", ""))
-
-
-def _extras_decided() -> bool:
-    """User has either added an extra camera or explicitly said 'no extras'."""
-    return get_setting("setup_extras_done", "").strip().lower() == "true"
+def _cameras_decided() -> bool:
+    return get_setting("setup_cameras_done", "").strip().lower() == "true"
 
 
 def _discord_decided() -> bool:
@@ -73,10 +67,8 @@ def _discord_decided() -> bool:
 def _wizard_state() -> str:
     if not _has_users():
         return "admin"
-    if not _has_primary_camera():
-        return "camera"
-    if not _extras_decided():
-        return "extras"
+    if not _cameras_decided():
+        return "cameras"
     if not _discord_decided():
         return "discord"
     return "done"
@@ -91,6 +83,38 @@ def _start_camera_loop() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Camera list helpers (stored as JSON in a single setting during setup)
+# ---------------------------------------------------------------------------
+
+def _load_cams() -> list[dict]:
+    raw = get_setting("setup_cameras", "")
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_cams(cams: list[dict]) -> None:
+    set_setting("setup_cameras", json.dumps(cams), user_id=session.get("user_id"))
+
+
+def _cam_describe(cam: dict) -> str:
+    t = cam.get("type", "")
+    if t == "tapo":
+        return f"Tapo · {cam.get('host','')}"
+    if t == "ip":
+        return f"IP / RTSP · {cam.get('url','')[:48]}"
+    if t == "kinect":
+        return "Kinect v1"
+    if t == "webcam":
+        return f"USB / Pi · /dev/video{cam.get('index', 0)}"
+    return t
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -101,18 +125,15 @@ def wizard():
 
     state = _wizard_state()
     if state == "done":
-        # Self-heal: every step satisfied, flip the flag.
         set_setting("setup_complete", "true", user_id=session.get("user_id"))
         _start_camera_loop()
         return redirect(url_for("admin.dashboard"))
 
-    extras = _list_extra_cameras() if state in {"extras", "discord"} else []
+    cams = _load_cams() if state == "cameras" else []
     return render_template(
         "setup/wizard.html",
         step=state,
-        primary_kind=get_setting("camera_preferred_source", ""),
-        primary_label=_describe_primary(),
-        extras=extras,
+        cams=[{**c, "describe": _cam_describe(c)} for c in cams],
     )
 
 
@@ -160,78 +181,155 @@ def submit_admin():
     return redirect(url_for("setup.wizard"))
 
 
-# --------- PRIMARY CAMERA ----------
+# --------- CAMERAS ----------
 
-@setup_bp.route("/camera", methods=["POST"])
-def submit_camera():
+@setup_bp.route("/cameras/add", methods=["POST"])
+def add_camera():
     if not _has_users():
         return redirect(url_for("setup.wizard"))
 
     cam_type = (request.form.get("cam_type") or "").strip().lower()
-    if cam_type not in {"webcam", "ip", "kinect", "tapo"}:
-        flash("Pick a camera type to continue.", "danger")
-        return redirect(url_for("setup.wizard"))
-
-    uid = session.get("user_id")
-    pending: list[tuple[str, str]] = _validate_camera_fields(cam_type, request.form)
-    if pending is None:
-        return redirect(url_for("setup.wizard"))
-
-    set_setting("camera_preferred_source", cam_type, user_id=uid)
-    for k, v in pending:
-        set_setting(k, v, user_id=uid)
-
-    audit("SETUP_CAMERA_CONFIGURED", user_id=uid,
-          username=session.get("username", ""),
-          detail=f"type={cam_type}", ip_address=get_client_ip())
-    return redirect(url_for("setup.wizard"))
-
-
-# --------- EXTRA (live-only) CAMERAS ----------
-
-@setup_bp.route("/extras/add", methods=["POST"])
-def add_extra_camera():
-    if not _has_primary_camera():
+    if cam_type not in {"webcam", "ip", "tapo", "kinect"}:
+        flash("Pick a camera type.", "danger")
         return redirect(url_for("setup.wizard"))
 
     label = (request.form.get("label") or "").strip()
-    url = (request.form.get("url") or "").strip()
-    if not url:
-        flash("Stream URL is required for an extra camera.", "danger")
-        return redirect(url_for("setup.wizard"))
+    cam: dict = {"id": uuid.uuid4().hex[:8], "type": cam_type, "label": label}
 
-    if not (url.startswith("rtsp://") or url.startswith("http://") or url.startswith("https://")):
-        flash("Stream URL must start with rtsp://, http://, or https://", "danger")
-        return redirect(url_for("setup.wizard"))
+    if cam_type == "webcam":
+        try:
+            idx = int(request.form.get("index") or "0")
+        except ValueError:
+            flash("Camera index must be a number.", "danger")
+            return redirect(url_for("setup.wizard"))
+        cam["index"] = max(0, idx)
+    elif cam_type == "ip":
+        url = (request.form.get("url") or "").strip()
+        if not url:
+            flash("Stream URL is required.", "danger")
+            return redirect(url_for("setup.wizard"))
+        if not re.match(r"^(rtsp|rtsps|http|https)://", url):
+            flash("URL must start with rtsp://, http://, or https://", "danger")
+            return redirect(url_for("setup.wizard"))
+        transport = (request.form.get("transport") or "tcp").strip().lower()
+        if transport not in {"tcp", "udp", "udp_multicast", "http"}:
+            transport = "tcp"
+        cam["url"] = url
+        cam["transport"] = transport
+    elif cam_type == "tapo":
+        host = (request.form.get("host") or "").strip()
+        username = (request.form.get("username") or "admin").strip() or "admin"
+        password = request.form.get("password") or ""
+        stream = (request.form.get("stream") or "stream1").strip().lower()
+        if stream not in {"stream1", "stream2"}:
+            stream = "stream1"
+        if not host or not password:
+            flash("Tapo host and password are required.", "danger")
+            return redirect(url_for("setup.wizard"))
+        cam.update(host=host, username=username, password=password, stream=stream)
+    # Kinect needs no fields.
 
-    extras = _list_extra_cameras_raw()
-    line = f"{label}|{url}" if label else url
-    extras.append(line)
-    set_setting("ip_camera_urls", "\n".join(extras), user_id=session.get("user_id"))
-    flash(f"Added camera: {label or url}", "success")
+    cams = _load_cams()
+    # If this is the first camera, default to detection.
+    if not any(c.get("detection") for c in cams):
+        cam["detection"] = True
+    cams.append(cam)
+    _save_cams(cams)
+    flash(f"Added: {_cam_describe(cam)}", "success")
     return redirect(url_for("setup.wizard"))
 
 
-@setup_bp.route("/extras/remove", methods=["POST"])
-def remove_extra_camera():
-    try:
-        idx = int(request.form.get("idx", "-1"))
-    except (TypeError, ValueError):
-        idx = -1
-    extras = _list_extra_cameras_raw()
-    if 0 <= idx < len(extras):
-        removed = extras.pop(idx)
-        set_setting("ip_camera_urls", "\n".join(extras), user_id=session.get("user_id"))
-        flash(f"Removed: {removed}", "info")
+@setup_bp.route("/cameras/remove", methods=["POST"])
+def remove_camera():
+    cam_id = (request.form.get("id") or "").strip()
+    cams = _load_cams()
+    new_cams = [c for c in cams if c.get("id") != cam_id]
+    # If we removed the detection cam, promote the first survivor.
+    if cams != new_cams and not any(c.get("detection") for c in new_cams) and new_cams:
+        new_cams[0]["detection"] = True
+    _save_cams(new_cams)
     return redirect(url_for("setup.wizard"))
 
 
-@setup_bp.route("/extras/done", methods=["POST"])
-def extras_done():
-    if not _has_primary_camera():
+@setup_bp.route("/cameras/detection", methods=["POST"])
+def set_detection():
+    cam_id = (request.form.get("id") or "").strip()
+    cams = _load_cams()
+    found = False
+    for c in cams:
+        if c.get("id") == cam_id:
+            c["detection"] = True
+            found = True
+        else:
+            c["detection"] = False
+    if found:
+        _save_cams(cams)
+    return redirect(url_for("setup.wizard"))
+
+
+@setup_bp.route("/cameras/done", methods=["POST"])
+def cameras_done():
+    if not _has_users():
         return redirect(url_for("setup.wizard"))
-    set_setting("setup_extras_done", "true", user_id=session.get("user_id"))
+
+    cams = _load_cams()
+    _expand_cameras_into_settings(cams)
+    set_setting("setup_cameras_done", "true", user_id=session.get("user_id"))
+    audit("SETUP_CAMERAS_CONFIGURED",
+          user_id=session.get("user_id"),
+          username=session.get("username", ""),
+          detail=f"count={len(cams)}", ip_address=get_client_ip())
     return redirect(url_for("setup.wizard"))
+
+
+def _expand_cameras_into_settings(cams: list[dict]) -> None:
+    """Translate the wizard's camera list into the runtime setting keys
+    used by camera.py."""
+    uid = session.get("user_id")
+    detection = next((c for c in cams if c.get("detection")), None)
+
+    if not detection:
+        # Allow finishing setup with zero cameras. Mark source as webcam so
+        # the loop has *something* to default to; the user can fix it later.
+        set_setting("camera_preferred_source", "webcam", user_id=uid)
+    else:
+        t = detection.get("type", "webcam")
+        set_setting("camera_preferred_source", t, user_id=uid)
+        if t == "tapo":
+            set_setting("tapo_host", detection.get("host", ""), user_id=uid)
+            set_setting("tapo_username", detection.get("username", "admin"), user_id=uid)
+            set_setting("tapo_password", detection.get("password", ""), user_id=uid)
+            set_setting("tapo_stream", detection.get("stream", "stream1"), user_id=uid)
+        elif t == "ip":
+            set_setting("ip_camera_url", detection.get("url", ""), user_id=uid)
+            set_setting("ip_camera_rtsp_transport",
+                        detection.get("transport", "tcp"), user_id=uid)
+        elif t == "webcam":
+            set_setting("camera_index", str(detection.get("index", 0)), user_id=uid)
+
+    # Live-only cameras (everything that isn't the detection cam):
+    extras = [c for c in cams if not c.get("detection")]
+    extras_lines: list[str] = []
+    extra_indices: list[str] = []
+    for c in extras:
+        if c.get("type") == "ip":
+            line = f"{c.get('label','')}|{c.get('url','')}" if c.get("label") else c.get("url", "")
+            if line:
+                extras_lines.append(line)
+        elif c.get("type") == "tapo":
+            host = c.get("host", "")
+            user = c.get("username", "admin")
+            pw = c.get("password", "")
+            stream = c.get("stream", "stream1")
+            from urllib.parse import quote
+            url = f"rtsp://{quote(user, safe='')}:{quote(pw, safe='')}@{host}:554/{stream}"
+            line = f"{c.get('label','')}|{url}" if c.get("label") else url
+            extras_lines.append(line)
+        elif c.get("type") == "webcam":
+            extra_indices.append(str(c.get("index", 0)))
+
+    set_setting("ip_camera_urls", "\n".join(extras_lines), user_id=uid)
+    set_setting("usb_camera_indices", ",".join(extra_indices), user_id=uid)
 
 
 # --------- DISCORD ----------
@@ -259,13 +357,13 @@ def submit_discord():
     audit("SETUP_COMPLETE", user_id=uid,
           username=session.get("username", ""),
           ip_address=get_client_ip())
-    flash("Setup complete. Welcome to CacheSec.", "success")
+    flash("Setup complete.", "success")
     _start_camera_loop()
     return redirect(url_for("admin.dashboard"))
 
 
 # ---------------------------------------------------------------------------
-# Camera test endpoint (used by the wizard's auto-probe)
+# Manual camera test (only when the user clicks the Test button)
 # ---------------------------------------------------------------------------
 
 @setup_bp.route("/test-camera", methods=["POST"])
@@ -276,114 +374,34 @@ def test_camera():
     cam_type = (request.form.get("cam_type") or "").strip().lower()
     try:
         if cam_type == "webcam":
-            return _probe_webcam()
+            try:
+                idx = int(request.form.get("index") or "0")
+            except ValueError:
+                idx = 0
+            return _probe_webcam(idx)
         if cam_type == "ip":
-            return _probe_url((request.form.get("ip_camera_url") or "").strip())
+            return _probe_url((request.form.get("url") or "").strip())
         if cam_type == "tapo":
-            host = (request.form.get("tapo_host") or "").strip()
-            user = (request.form.get("tapo_username") or "admin").strip() or "admin"
-            pw = request.form.get("tapo_password") or ""
-            stream = (request.form.get("tapo_stream") or "stream1").strip().lower()
+            from urllib.parse import quote
+            host = (request.form.get("host") or "").strip()
+            user = (request.form.get("username") or "admin").strip() or "admin"
+            pw = request.form.get("password") or ""
+            stream = (request.form.get("stream") or "stream1").strip().lower()
             if stream not in {"stream1", "stream2"}:
                 stream = "stream1"
             if not host or not pw:
                 return jsonify(ok=False, error="Host and password required.")
-            url = f"rtsp://{quote(user, safe='')}:{quote(pw, safe='')}@{host}:554/{stream}"
-            return _probe_url(url)
+            return _probe_url(f"rtsp://{quote(user,safe='')}:{quote(pw,safe='')}@{host}:554/{stream}")
         if cam_type == "kinect":
             return _probe_kinect()
-        if cam_type == "extra":
-            return _probe_url((request.form.get("url") or "").strip())
-        return jsonify(ok=False, error="Unknown camera type.")
+        return jsonify(ok=False, error="Pick a camera type first.")
     except Exception as exc:
         logger.exception("Camera probe failed")
         return jsonify(ok=False, error=str(exc))
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _validate_camera_fields(cam_type: str, form) -> "list[tuple[str,str]] | None":
-    """Return list of (key, value) settings to persist, or None on validation
-    failure (after flashing an error)."""
-    pending: list[tuple[str, str]] = []
-    if cam_type == "ip":
-        url = (form.get("ip_camera_url") or "").strip()
-        if not url:
-            flash("Stream URL is required.", "danger")
-            return None
-        if not (url.startswith("rtsp://") or url.startswith("http://") or url.startswith("https://")):
-            flash("URL must start with rtsp://, http://, or https://", "danger")
-            return None
-        transport = (form.get("ip_camera_rtsp_transport") or "tcp").strip().lower()
-        if transport not in {"tcp", "udp", "udp_multicast", "http"}:
-            transport = "tcp"
-        pending.append(("ip_camera_url", url))
-        pending.append(("ip_camera_rtsp_transport", transport))
-    elif cam_type == "tapo":
-        host = (form.get("tapo_host") or "").strip()
-        username = (form.get("tapo_username") or "admin").strip() or "admin"
-        password = form.get("tapo_password") or ""
-        stream = (form.get("tapo_stream") or "stream1").strip().lower()
-        if stream not in {"stream1", "stream2"}:
-            stream = "stream1"
-        if not host:
-            flash("Tapo host (IP) is required.", "danger")
-            return None
-        if not password:
-            flash("Tapo password is required.", "danger")
-            return None
-        pending.append(("tapo_host", host))
-        pending.append(("tapo_username", username))
-        pending.append(("tapo_password", password))
-        pending.append(("tapo_stream", stream))
-    return pending
-
-
-def _list_extra_cameras_raw() -> list[str]:
-    raw = get_setting("ip_camera_urls", "")
-    return [line.strip() for line in raw.replace(",", "\n").splitlines() if line.strip()]
-
-
-def _list_extra_cameras() -> list[dict]:
-    out = []
-    for idx, line in enumerate(_list_extra_cameras_raw()):
-        parts = [p.strip() for p in line.split("|") if p.strip()]
-        if not parts:
-            continue
-        if len(parts) == 1:
-            out.append({"idx": idx, "label": "", "url": parts[0]})
-        else:
-            label = parts[0]
-            url = parts[1]
-            # If first part looks like a URL, swap.
-            if "://" in label and "://" not in url:
-                label, url = "", parts[0]
-            out.append({"idx": idx, "label": label, "url": url})
-    return out
-
-
-def _describe_primary() -> str:
-    src = get_setting("camera_preferred_source", "")
-    if src == "tapo":
-        host = get_setting("tapo_host", "")
-        return f"Tapo · {host}" if host else "Tapo"
-    if src == "ip":
-        url = get_setting("ip_camera_url", "")
-        return f"IP / RTSP · {url[:48]}" if url else "IP / RTSP"
-    if src == "kinect":
-        return "Kinect v1"
-    if src == "webcam":
-        return "USB / Pi camera"
-    return src or ""
-
-
-# ---- probes ----
-
-def _probe_webcam():
+def _probe_webcam(idx: int):
     import cv2
-    idx = config.CAMERA_INDEX
     cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
     if not cap.isOpened():
         cap.release()

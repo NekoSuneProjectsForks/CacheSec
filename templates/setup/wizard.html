@@ -2,7 +2,7 @@
 {% block title %}Setup{% endblock %}
 {% block body %}
 <div class="min-vh-100 d-flex align-items-center justify-content-center bg-dark py-4">
-  <div class="card bg-cs-card border-secondary shadow-lg" style="width:100%;max-width:640px;">
+  <div class="card bg-cs-card border-secondary shadow-lg" style="width:100%;max-width:680px;">
     <div class="card-body p-4">
 
       <div class="text-center mb-3">
@@ -11,10 +11,9 @@
         <p class="text-muted small mb-0">First-run setup</p>
       </div>
 
-      <!-- Progress -->
       <div class="d-flex justify-content-between mb-4 small">
-        {% set step_order = ['admin', 'camera', 'extras', 'discord'] %}
-        {% set step_names = {'admin':'Admin','camera':'Camera','extras':'More cameras','discord':'Discord'} %}
+        {% set step_order = ['admin', 'cameras', 'discord'] %}
+        {% set step_names = {'admin':'Admin','cameras':'Cameras','discord':'Discord'} %}
         {% set current_idx = step_order.index(step) if step in step_order else step_order|length %}
         {% for s in step_order %}
           {% set idx = loop.index0 %}
@@ -25,17 +24,16 @@
         {% endfor %}
       </div>
 
-      <!-- Flash messages -->
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% for cat, msg in messages %}
           <div class="alert alert-{{ cat }} py-2 small">{{ msg }}</div>
         {% endfor %}
       {% endwith %}
 
-      <!-- ============================================================ -->
+      <!-- =================== ADMIN =================== -->
       {% if step == 'admin' %}
       <h5 class="mb-3">Create your admin account</h5>
-      <p class="small text-muted">This account manages everything.</p>
+      <p class="small text-muted">Manages everything: settings, cameras, enrolled people, other users.</p>
       <form method="POST" action="{{ url_for('setup.submit_admin') }}" autocomplete="off">
         <div class="mb-3">
           <label class="form-label small text-muted">Username</label>
@@ -59,186 +57,189 @@
         </button>
       </form>
 
-      <!-- ============================================================ -->
-      {% elif step == 'camera' %}
-      <h5 class="mb-3">Add your primary camera</h5>
-      <p class="small text-muted">Pick a type — the form fills in below. We'll test the connection automatically.</p>
-
-      <!-- Picker cards -->
-      <div class="row g-2 mb-3" id="picker">
-        {% set picker_items = [
-          ('webcam', 'webcam', 'USB / Pi', 'Auto-detect /dev/video0'),
-          ('tapo',   'camera-reels', 'TP-Link Tapo', 'Local RTSP via Camera Account'),
-          ('ip',     'router', 'IP / RTSP', 'Any rtsp:// or http(s) stream'),
-          ('kinect', 'badge-3d', 'Kinect v1', 'Xbox 360 Kinect over USB'),
-        ] %}
-        {% for value, icon, label, hint in picker_items %}
-        <div class="col-6 col-md-3">
-          <button type="button" class="cam-pick btn w-100 h-100 d-flex flex-column align-items-center justify-content-center p-3 border border-secondary"
-                  data-type="{{ value }}" style="min-height:8rem;">
-            <i class="bi bi-{{ icon }} mb-2" style="font-size:1.6rem;"></i>
-            <div class="fw-semibold small">{{ label }}</div>
-            <div class="text-muted" style="font-size:0.7rem;">{{ hint }}</div>
-          </button>
-        </div>
-        {% endfor %}
+      <!-- =================== CAMERAS =================== -->
+      {% elif step == 'cameras' %}
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="mb-0">Cameras</h5>
+        <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#addCamModal">
+          <i class="bi bi-plus-lg me-1"></i>Add camera
+        </button>
       </div>
-
-      <form method="POST" action="{{ url_for('setup.submit_camera') }}" id="cam-form">
-        <input type="hidden" name="cam_type" id="cam_type" value="">
-
-        <!-- USB/Pi pane: just a probe + continue -->
-        <div class="cam-pane d-none" data-type="webcam">
-          <div class="alert alert-secondary small">
-            CacheSec will use the first detected USB / Pi camera. Click <strong>Test connection</strong> to verify.
-          </div>
-        </div>
-
-        <!-- IP/RTSP pane -->
-        <div class="cam-pane d-none" data-type="ip">
-          <div class="mb-3">
-            <label class="form-label small text-muted">Stream URL</label>
-            <input type="url" name="ip_camera_url" id="ip_camera_url"
-                   class="form-control bg-secondary border-secondary text-light"
-                   placeholder="rtsp://user:pass@192.168.1.50:554/stream1">
-          </div>
-          <div class="mb-3">
-            <label class="form-label small text-muted">RTSP transport</label>
-            <select name="ip_camera_rtsp_transport" class="form-select bg-secondary border-secondary text-light">
-              <option value="tcp" selected>TCP (recommended)</option>
-              <option value="udp">UDP</option>
-              <option value="udp_multicast">UDP multicast</option>
-              <option value="http">HTTP tunnel</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Tapo pane -->
-        <div class="cam-pane d-none" data-type="tapo">
-          <div class="mb-3">
-            <label class="form-label small text-muted">Camera IP</label>
-            <input type="text" name="tapo_host" id="tapo_host"
-                   class="form-control bg-secondary border-secondary text-light"
-                   placeholder="192.168.1.60">
-          </div>
-          <div class="row g-2">
-            <div class="col-md-5 mb-3">
-              <label class="form-label small text-muted">User</label>
-              <input type="text" name="tapo_username" id="tapo_username"
-                     class="form-control bg-secondary border-secondary text-light"
-                     value="admin">
-            </div>
-            <div class="col-md-7 mb-3">
-              <label class="form-label small text-muted">Password</label>
-              <input type="password" name="tapo_password" id="tapo_password"
-                     class="form-control bg-secondary border-secondary text-light">
-            </div>
-          </div>
-          <p class="small text-muted">
-            Use the <strong>Camera Account</strong> from the Tapo app
-            (Advanced Settings → Camera Account), NOT the cloud login.
-          </p>
-          <div class="mb-3">
-            <label class="form-label small text-muted">Stream quality</label>
-            <select name="tapo_stream" id="tapo_stream" class="form-select bg-secondary border-secondary text-light">
-              <option value="stream1" selected>High (stream1)</option>
-              <option value="stream2">Low (stream2)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Kinect pane -->
-        <div class="cam-pane d-none" data-type="kinect">
-          <div class="alert alert-secondary small">
-            CacheSec will probe USB for a Kinect v1. Click <strong>Test connection</strong> to verify it's powered and detected.
-          </div>
-        </div>
-
-        <!-- Status + continue -->
-        <div class="cam-pane-actions d-none">
-          <div class="d-flex gap-2 align-items-center mb-3">
-            <button type="button" id="cam-test" class="btn btn-outline-light">
-              <i class="bi bi-plug-fill me-1"></i>Test connection
-            </button>
-            <span id="cam-test-status" class="small flex-grow-1"></span>
-          </div>
-          <button type="submit" id="cam-continue" class="btn btn-danger w-100" disabled>
-            Continue <i class="bi bi-arrow-right ms-1"></i>
-          </button>
-          <p class="small text-muted text-center mt-2 mb-0">
-            Test must pass before you can continue. <a href="#" id="cam-bypass" class="text-muted">Save anyway</a> if you'll fix it later.
-          </p>
-        </div>
-      </form>
-
-      <!-- ============================================================ -->
-      {% elif step == 'extras' %}
-      <h5 class="mb-3">Add live-only cameras</h5>
       <p class="small text-muted">
-        Optional. These show up alongside your primary feed but don't run face
-        detection. Add as many as you like; you can edit them later in Settings.
+        Add as many cameras as you like. Pick one for face detection — the rest are live-only.
+        Everything is editable later in Settings.
       </p>
 
-      <div class="border border-secondary rounded p-3 mb-3 bg-dark">
-        <div class="small text-muted mb-1">Primary detection feed</div>
-        <div class="fw-semibold">{{ primary_label }}</div>
-      </div>
-
-      {% if extras %}
+      {% if cams %}
       <div class="mb-3">
-        {% for cam in extras %}
+        {% for cam in cams %}
         <div class="d-flex justify-content-between align-items-center border border-secondary rounded p-2 mb-2">
-          <div class="me-2 text-truncate">
-            <div class="fw-semibold">{{ cam.label or 'Camera ' ~ (loop.index) }}</div>
-            <div class="small text-muted text-truncate">{{ cam.url }}</div>
+          <div class="me-2 flex-grow-1 text-truncate">
+            <div class="fw-semibold text-truncate">
+              {{ cam.label or cam.describe }}
+              {% if cam.detection %}
+                <span class="badge bg-danger ms-2">Detection</span>
+              {% endif %}
+            </div>
+            <div class="small text-muted text-truncate">{{ cam.describe }}</div>
           </div>
-          <form method="POST" action="{{ url_for('setup.remove_extra_camera') }}" class="m-0">
-            <input type="hidden" name="idx" value="{{ cam.idx }}">
-            <button type="submit" class="btn btn-sm btn-outline-danger" title="Remove">
-              <i class="bi bi-trash"></i>
-            </button>
-          </form>
+          <div class="d-flex gap-1">
+            {% if not cam.detection %}
+            <form method="POST" action="{{ url_for('setup.set_detection') }}" class="m-0">
+              <input type="hidden" name="id" value="{{ cam.id }}">
+              <button type="submit" class="btn btn-sm btn-outline-light" title="Use for detection">
+                <i class="bi bi-bullseye"></i>
+              </button>
+            </form>
+            {% endif %}
+            <form method="POST" action="{{ url_for('setup.remove_camera') }}" class="m-0">
+              <input type="hidden" name="id" value="{{ cam.id }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="Remove">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </div>
         </div>
         {% endfor %}
+      </div>
+      {% else %}
+      <div class="alert alert-secondary small">
+        No cameras yet. You can add some now or skip and configure them later in Settings.
       </div>
       {% endif %}
 
-      <form method="POST" action="{{ url_for('setup.add_extra_camera') }}" id="extra-form" class="border border-secondary rounded p-3 mb-3">
-        <div class="small text-muted mb-2">Add another camera</div>
-        <div class="row g-2">
-          <div class="col-md-5 mb-2">
-            <input type="text" name="label"
-                   class="form-control bg-secondary border-secondary text-light"
-                   placeholder="Friendly name (e.g. Front door)">
-          </div>
-          <div class="col-md-7 mb-2">
-            <input type="url" name="url" id="extra_url"
-                   class="form-control bg-secondary border-secondary text-light"
-                   placeholder="rtsp://user:pass@host:554/stream1" required>
-          </div>
-        </div>
-        <div class="d-flex gap-2 align-items-center mb-2">
-          <button type="button" id="extra-test" class="btn btn-sm btn-outline-light">
-            <i class="bi bi-plug-fill me-1"></i>Test
-          </button>
-          <span id="extra-test-status" class="small flex-grow-1"></span>
-        </div>
-        <button type="submit" class="btn btn-outline-light w-100">
-          <i class="bi bi-plus-lg me-1"></i>Add camera
-        </button>
-      </form>
-
-      <form method="POST" action="{{ url_for('setup.extras_done') }}">
-        <button type="submit" class="btn btn-danger w-100">
-          {% if extras %}Continue with {{ extras|length }} extra{% if extras|length != 1 %}s{% endif %}{% else %}Skip — no extras{% endif %}
+      <form method="POST" action="{{ url_for('setup.cameras_done') }}">
+        <button type="submit" class="btn btn-{% if cams %}danger{% else %}outline-light{% endif %} w-100">
+          {% if cams %}Continue with {{ cams|length }} camera{% if cams|length != 1 %}s{% endif %}{% else %}Continue without cameras{% endif %}
           <i class="bi bi-arrow-right ms-1"></i>
         </button>
       </form>
 
-      <!-- ============================================================ -->
+      <!-- Add-camera modal -->
+      <div class="modal fade" id="addCamModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content bg-dark text-light border border-secondary">
+            <form method="POST" action="{{ url_for('setup.add_camera') }}" id="add-cam-form">
+              <div class="modal-header border-secondary">
+                <h5 class="modal-title">Add camera</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <div class="mb-3">
+                  <label class="form-label small text-muted">Type</label>
+                  <div class="btn-group w-100" role="group">
+                    {% set types = [('webcam','webcam','USB / Pi'), ('tapo','camera-reels','Tapo'), ('ip','router','IP / RTSP'), ('kinect','badge-3d','Kinect')] %}
+                    {% for value, icon, label in types %}
+                    <input type="radio" class="btn-check" name="cam_type" id="t-{{ value }}" value="{{ value }}" autocomplete="off" {% if loop.first %}checked{% endif %}>
+                    <label class="btn btn-outline-light" for="t-{{ value }}"><i class="bi bi-{{ icon }} me-1"></i>{{ label }}</label>
+                    {% endfor %}
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-label small text-muted">Friendly name (optional)</label>
+                  <input type="text" name="label"
+                         class="form-control bg-secondary border-secondary text-light"
+                         placeholder="e.g. Front door, Living room, Tapo cam">
+                </div>
+
+                <!-- USB / Pi -->
+                <div class="cam-pane" data-type="webcam">
+                  <div class="mb-3">
+                    <label class="form-label small text-muted">Device index (V4L2)</label>
+                    <input type="number" name="index" min="0" max="63" value="0"
+                           class="form-control bg-secondary border-secondary text-light">
+                    <div class="form-text text-muted small">
+                      <code>/dev/videoN</code>. Default <code>0</code>. Use <code>v4l2-ctl --list-devices</code> on the host
+                      to find the right node when running in Docker.
+                    </div>
+                  </div>
+                </div>
+
+                <!-- IP / RTSP -->
+                <div class="cam-pane d-none" data-type="ip">
+                  <div class="mb-3">
+                    <label class="form-label small text-muted">Stream URL</label>
+                    <input type="url" name="url"
+                           class="form-control bg-secondary border-secondary text-light"
+                           placeholder="rtsp://user:pass@192.168.1.50:554/stream1">
+                  </div>
+                  <div class="mb-3">
+                    <label class="form-label small text-muted">RTSP transport</label>
+                    <select name="transport" class="form-select bg-secondary border-secondary text-light">
+                      <option value="tcp" selected>TCP (recommended)</option>
+                      <option value="udp">UDP</option>
+                      <option value="udp_multicast">UDP multicast</option>
+                      <option value="http">HTTP tunnel</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Tapo -->
+                <div class="cam-pane d-none" data-type="tapo">
+                  <div class="mb-3">
+                    <label class="form-label small text-muted">Camera IP</label>
+                    <input type="text" name="host"
+                           class="form-control bg-secondary border-secondary text-light"
+                           placeholder="192.168.1.60">
+                  </div>
+                  <div class="row g-2">
+                    <div class="col-md-5 mb-3">
+                      <label class="form-label small text-muted">User</label>
+                      <input type="text" name="username"
+                             class="form-control bg-secondary border-secondary text-light"
+                             value="admin">
+                    </div>
+                    <div class="col-md-7 mb-3">
+                      <label class="form-label small text-muted">Password</label>
+                      <input type="password" name="password"
+                             class="form-control bg-secondary border-secondary text-light">
+                    </div>
+                  </div>
+                  <p class="small text-muted">
+                    Use the <strong>Camera Account</strong> from the Tapo app
+                    (Advanced Settings → Camera Account), NOT the cloud login.
+                  </p>
+                  <div class="mb-3">
+                    <label class="form-label small text-muted">Stream quality</label>
+                    <select name="stream" class="form-select bg-secondary border-secondary text-light">
+                      <option value="stream1" selected>High (stream1)</option>
+                      <option value="stream2">Low (stream2)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Kinect -->
+                <div class="cam-pane d-none" data-type="kinect">
+                  <div class="alert alert-secondary small mb-0">
+                    Kinect v1 over USB. Make sure <code>libfreenect</code> is available
+                    (it is in the <code>:kinect</code> Docker image variant) and the
+                    device is fully powered.
+                  </div>
+                </div>
+
+                <div class="d-flex gap-2 align-items-center mt-2">
+                  <button type="button" id="add-cam-test" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-plug-fill me-1"></i>Test connection
+                  </button>
+                  <span id="add-cam-test-status" class="small flex-grow-1"></span>
+                </div>
+              </div>
+              <div class="modal-footer border-secondary">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-danger">
+                  <i class="bi bi-plus-lg me-1"></i>Add to list
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================== DISCORD =================== -->
       {% elif step == 'discord' %}
       <h5 class="mb-3">Discord alerts <small class="text-muted">(optional)</small></h5>
-      <p class="small text-muted">Get a webhook ping when an unknown person is detected.</p>
+      <p class="small text-muted">Webhook URL for unknown-person alerts. Editable later in Settings.</p>
       <form method="POST" action="{{ url_for('setup.submit_discord') }}">
         <div class="mb-3">
           <label class="form-label small text-muted">Discord webhook URL</label>
@@ -262,141 +263,60 @@
     </div>
   </div>
 </div>
-
-<style>
-  .cam-pick { background: rgba(255,255,255,0.03); transition: border-color .15s, background .15s; }
-  .cam-pick:hover { border-color: #dc3545 !important; background: rgba(220,53,69,0.08); }
-  .cam-pick.active { border-color: #dc3545 !important; background: rgba(220,53,69,0.18); }
-</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
 (function () {
-  // --------- PRIMARY CAMERA STEP ----------
-  const picker = document.getElementById('picker');
-  if (picker) {
-    const camTypeInput = document.getElementById('cam_type');
-    const panes = document.querySelectorAll('.cam-pane');
-    const actions = document.querySelector('.cam-pane-actions');
-    const continueBtn = document.getElementById('cam-continue');
-    const status = document.getElementById('cam-test-status');
-    const testBtn = document.getElementById('cam-test');
-    const bypass = document.getElementById('cam-bypass');
-    const form = document.getElementById('cam-form');
-    let currentType = '';
-    let lastTestOk = false;
+  const form = document.getElementById('add-cam-form');
+  if (!form) return;
 
-    function showPane(t) {
-      panes.forEach(p => p.classList.toggle('d-none', p.dataset.type !== t));
-      actions.classList.toggle('d-none', !t);
-    }
+  const radios = form.querySelectorAll('input[name="cam_type"]');
+  const panes = form.querySelectorAll('.cam-pane');
+  const status = document.getElementById('add-cam-test-status');
+  const testBtn = document.getElementById('add-cam-test');
 
-    function setStatus(msg, kind) {
-      // kind: 'ok' | 'err' | 'busy' | ''
-      status.textContent = msg || '';
-      status.className = 'small flex-grow-1';
-      if (kind === 'ok') status.classList.add('text-success');
-      else if (kind === 'err') status.classList.add('text-warning');
-      else if (kind === 'busy') status.classList.add('text-muted');
-    }
-
-    function setContinueState() {
-      continueBtn.disabled = !lastTestOk;
-    }
-
-    function pick(t) {
-      currentType = t;
-      camTypeInput.value = t;
-      lastTestOk = false;
-      setStatus('', '');
-      setContinueState();
-      showPane(t);
-      document.querySelectorAll('.cam-pick').forEach(b => b.classList.toggle('active', b.dataset.type === t));
-      // For webcam/kinect, auto-test immediately — there's nothing for the user to type.
-      if (t === 'webcam' || t === 'kinect') runTest();
-    }
-
-    document.querySelectorAll('.cam-pick').forEach(btn => {
-      btn.addEventListener('click', () => pick(btn.dataset.type));
-    });
-
-    function runTest() {
-      if (!currentType) return;
-      setStatus('Testing…', 'busy');
-      lastTestOk = false;
-      setContinueState();
-      const fd = new FormData(form);
-      fetch({{ url_for('setup.test_camera')|tojson }}, { method: 'POST', body: fd })
-        .then(r => r.json())
-        .then(d => {
-          if (d.ok) {
-            setStatus('✓ ' + (d.message || 'Connected'), 'ok');
-            lastTestOk = true;
-          } else {
-            setStatus('✗ ' + (d.error || 'Failed'), 'err');
-          }
-          setContinueState();
-        })
-        .catch(() => {
-          setStatus('✗ Network error', 'err');
-          setContinueState();
-        });
-    }
-
-    testBtn.addEventListener('click', runTest);
-
-    // Auto-retest 800ms after the user stops typing in URL/host/password fields.
-    let debounce = null;
-    form.addEventListener('input', (ev) => {
-      if (!currentType || currentType === 'webcam' || currentType === 'kinect') return;
-      // Only re-test if the field actually feeds the test (URL or all 3 Tapo fields).
-      clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        if (currentType === 'ip') {
-          if (form.querySelector('#ip_camera_url').value.trim()) runTest();
-        } else if (currentType === 'tapo') {
-          const host = form.querySelector('#tapo_host').value.trim();
-          const pw = form.querySelector('#tapo_password').value;
-          if (host && pw) runTest();
-        }
-      }, 800);
-    });
-
-    bypass.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      if (!currentType) {
-        setStatus('Pick a camera type first.', 'err');
-        return;
-      }
-      // Allow submit without a successful test.
-      lastTestOk = true;
-      continueBtn.disabled = false;
-      setStatus('Skipping connection check — fix in Settings later.', 'err');
-    });
+  function showPane(t) {
+    panes.forEach(p => p.classList.toggle('d-none', p.dataset.type !== t));
   }
 
-  // --------- EXTRAS STEP ----------
-  const extraTestBtn = document.getElementById('extra-test');
-  if (extraTestBtn) {
-    const urlInput = document.getElementById('extra_url');
-    const status = document.getElementById('extra-test-status');
-    extraTestBtn.addEventListener('click', () => {
-      const url = urlInput.value.trim();
-      if (!url) { status.textContent = 'Enter a URL first.'; status.className = 'small flex-grow-1 text-warning'; return; }
-      status.textContent = 'Testing…'; status.className = 'small flex-grow-1 text-muted';
-      const fd = new FormData();
-      fd.append('cam_type', 'extra');
-      fd.append('url', url);
-      fetch({{ url_for('setup.test_camera')|tojson }}, { method: 'POST', body: fd })
-        .then(r => r.json())
-        .then(d => {
-          status.textContent = (d.ok ? '✓ ' : '✗ ') + (d.ok ? d.message : d.error);
-          status.className = 'small flex-grow-1 ' + (d.ok ? 'text-success' : 'text-warning');
-        })
-        .catch(() => { status.textContent = '✗ Network error'; status.className = 'small flex-grow-1 text-warning'; });
-    });
+  function setStatus(msg, kind) {
+    status.textContent = msg || '';
+    status.className = 'small flex-grow-1';
+    if (kind === 'ok') status.classList.add('text-success');
+    else if (kind === 'err') status.classList.add('text-warning');
+    else if (kind === 'busy') status.classList.add('text-muted');
   }
+
+  radios.forEach(r => r.addEventListener('change', () => {
+    setStatus('', '');
+    showPane(r.value);
+  }));
+
+  testBtn.addEventListener('click', () => {
+    setStatus('Testing…', 'busy');
+    const fd = new FormData(form);
+    fetch({{ url_for('setup.test_camera')|tojson }}, { method: 'POST', body: fd })
+      .then(r => r.json())
+      .then(d => {
+        setStatus((d.ok ? '✓ ' : '✗ ') + (d.ok ? (d.message || 'Connected') : (d.error || 'Failed')),
+                  d.ok ? 'ok' : 'err');
+      })
+      .catch(() => setStatus('✗ Network error', 'err'));
+  });
+
+  // Reset modal state on open
+  document.getElementById('addCamModal').addEventListener('show.bs.modal', () => {
+    setStatus('', '');
+    radios[0].checked = true;
+    showPane(radios[0].value);
+    form.querySelector('input[name="label"]').value = '';
+    const idx = form.querySelector('input[name="index"]'); if (idx) idx.value = '0';
+    const url = form.querySelector('input[name="url"]'); if (url) url.value = '';
+    const host = form.querySelector('input[name="host"]'); if (host) host.value = '';
+    const u = form.querySelector('input[name="username"]'); if (u) u.value = 'admin';
+    const pw = form.querySelector('input[name="password"]'); if (pw) pw.value = '';
+  });
 })();
 </script>
 {% endblock %}
