@@ -30,7 +30,6 @@
                    value="{{ settings.frame_skip or '3' }}">
           </div>
 
-<<<<<<< HEAD
           {% set source = settings.camera_preferred_source or 'webcam' %}
           {% set source_labels = {
             'webcam': 'USB / Pi Camera',
@@ -71,7 +70,11 @@
                 <span class="badge bg-secondary text-uppercase" id="primary-camera-kind">{{ source }}</span>
               </div>
             </div>
-=======
+            <div class="form-text text-muted">
+              Saved camera changes reload the capture pipeline without restarting Docker.
+            </div>
+          </div>
+
           <div class="col-md-6">
             <label class="form-label">Night Vision Mode</label>
             <select name="night_vision_mode"
@@ -82,20 +85,6 @@
             </select>
             <div class="form-text text-muted">
               Force off keeps USB software night vision and Kinect IR switching disabled.
-            </div>
-          </div>
-
-          <div class="col-md-6">
-            <label class="form-label">Camera Source</label>
-            <select name="camera_preferred_source"
-                    class="form-select bg-secondary border-secondary text-light">
-              {% set source = settings.camera_preferred_source or 'webcam' %}
-              <option value="webcam" {{ 'selected' if source == 'webcam' else '' }}>USB / Pi Camera</option>
-              <option value="ip" {{ 'selected' if source == 'ip' else '' }}>IP Camera / RTSP</option>
-              <option value="kinect" {{ 'selected' if source == 'kinect' else '' }}>Kinect</option>
-            </select>
-            <div class="form-text text-muted">
-              Saved camera changes reload the capture pipeline without restarting Docker.
             </div>
           </div>
 
@@ -204,18 +193,6 @@
             <input type="number" step="1" min="1" max="255" name="moving_object_threshold"
                    class="form-control bg-secondary border-secondary text-light"
                    value="{{ settings.moving_object_threshold or '25' }}">
-          </div>
-
-          <div class="col-md-6">
-            <label class="form-label">IP Camera URL</label>
-            <input type="url" name="ip_camera_url"
-                   class="form-control bg-secondary border-secondary text-light"
-                   placeholder="rtsp://user:pass@192.168.1.50:554/stream1"
-                   value="{{ settings.ip_camera_url or '' }}">
->>>>>>> 65353f1f75e1ff39789b056ad5fdef4aa75a0581
-            <div class="form-text text-muted">
-              Restart CacheSec after changing the primary camera source.
-            </div>
           </div>
 
           <div class="col-12">

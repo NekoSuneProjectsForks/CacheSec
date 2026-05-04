@@ -182,9 +182,9 @@
     ip: document.getElementById('sensor-ip'),
   };
   let activeSourceId = sourceButtons.length ? sourceButtons[0].dataset.sourceId : 'primary';
-<<<<<<< HEAD
   let activeSourceKind = sourceButtons.length ? sourceButtons[0].dataset.sourceKind : 'primary';
   let primaryDetectionSource = '';
+  const initialSourceCount = sourceButtons.length;
 
   const ptzOverlay = document.getElementById('tapo-ptz-overlay');
   const ptzError = document.getElementById('tapo-ptz-error');
@@ -286,9 +286,6 @@
         .catch(() => setPtzError('Network error'));
     });
   }
-=======
-  const initialSourceCount = sourceButtons.length;
->>>>>>> 65353f1f75e1ff39789b056ad5fdef4aa75a0581
 
   sourceButtons.forEach((button) => {
     button.addEventListener('click', () => {
