@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        INSTALL_KINECT: ${INSTALL_KINECT:-true}
+        INSTALL_KINECT: ${INSTALL_KINECT:-false}
         INSTALL_DETECTRON2: ${INSTALL_DETECTRON2:-false}
         # CPU wheels by default. For NVIDIA builds, set for example:
         # TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
