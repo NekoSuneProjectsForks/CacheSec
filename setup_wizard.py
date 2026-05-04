@@ -234,10 +234,8 @@ def add_camera():
         cam.update(host=host, username=username, password=password, stream=stream)
     # Kinect needs no fields.
 
+    cam["detection"] = False  # detection is opt-in per camera
     cams = _load_cams()
-    # If this is the first camera, default to detection.
-    if not any(c.get("detection") for c in cams):
-        cam["detection"] = True
     cams.append(cam)
     _save_cams(cams)
     flash(f"Added: {_cam_describe(cam)}", "success")
@@ -248,27 +246,20 @@ def add_camera():
 def remove_camera():
     cam_id = (request.form.get("id") or "").strip()
     cams = _load_cams()
-    new_cams = [c for c in cams if c.get("id") != cam_id]
-    # If we removed the detection cam, promote the first survivor.
-    if cams != new_cams and not any(c.get("detection") for c in new_cams) and new_cams:
-        new_cams[0]["detection"] = True
-    _save_cams(new_cams)
+    _save_cams([c for c in cams if c.get("id") != cam_id])
     return redirect(url_for("setup.wizard"))
 
 
-@setup_bp.route("/cameras/detection", methods=["POST"])
-def set_detection():
+@setup_bp.route("/cameras/toggle-detection", methods=["POST"])
+def toggle_detection():
+    """Flip detection on/off for one camera independently of the others."""
     cam_id = (request.form.get("id") or "").strip()
     cams = _load_cams()
-    found = False
     for c in cams:
         if c.get("id") == cam_id:
-            c["detection"] = True
-            found = True
-        else:
-            c["detection"] = False
-    if found:
-        _save_cams(cams)
+            c["detection"] = not bool(c.get("detection"))
+            break
+    _save_cams(cams)
     return redirect(url_for("setup.wizard"))
 
 
@@ -289,31 +280,37 @@ def cameras_done():
 
 def _expand_cameras_into_settings(cams: list[dict]) -> None:
     """Translate the wizard's camera list into the runtime setting keys
-    used by camera.py."""
-    uid = session.get("user_id")
-    detection = next((c for c in cams if c.get("detection")), None)
+    used by camera.py.
 
-    if not detection:
-        # Allow finishing setup with zero cameras. Mark source as webcam so
-        # the loop has *something* to default to; the user can fix it later.
-        set_setting("camera_preferred_source", "webcam", user_id=uid)
+    Model: zero or more cameras, each with `detection` independently on/off.
+    The first detection-on camera becomes the "primary detection feed"; the
+    rest become live-only sources. If no camera has detection on, we write
+    `camera_preferred_source = none` so the camera loop never tries to open
+    a device the user didn't explicitly add.
+    """
+    uid = session.get("user_id")
+    detection_cams = [c for c in cams if c.get("detection")]
+    primary = detection_cams[0] if detection_cams else None
+
+    if primary is None:
+        set_setting("camera_preferred_source", "none", user_id=uid)
     else:
-        t = detection.get("type", "webcam")
+        t = primary.get("type", "webcam")
         set_setting("camera_preferred_source", t, user_id=uid)
         if t == "tapo":
-            set_setting("tapo_host", detection.get("host", ""), user_id=uid)
-            set_setting("tapo_username", detection.get("username", "admin"), user_id=uid)
-            set_setting("tapo_password", detection.get("password", ""), user_id=uid)
-            set_setting("tapo_stream", detection.get("stream", "stream1"), user_id=uid)
+            set_setting("tapo_host", primary.get("host", ""), user_id=uid)
+            set_setting("tapo_username", primary.get("username", "admin"), user_id=uid)
+            set_setting("tapo_password", primary.get("password", ""), user_id=uid)
+            set_setting("tapo_stream", primary.get("stream", "stream1"), user_id=uid)
         elif t == "ip":
-            set_setting("ip_camera_url", detection.get("url", ""), user_id=uid)
+            set_setting("ip_camera_url", primary.get("url", ""), user_id=uid)
             set_setting("ip_camera_rtsp_transport",
-                        detection.get("transport", "tcp"), user_id=uid)
+                        primary.get("transport", "tcp"), user_id=uid)
         elif t == "webcam":
-            set_setting("camera_index", str(detection.get("index", 0)), user_id=uid)
+            set_setting("camera_index", str(primary.get("index", 0)), user_id=uid)
 
-    # Live-only cameras (everything that isn't the detection cam):
-    extras = [c for c in cams if not c.get("detection")]
+    # Everything that's not the primary detection cam is live-only.
+    extras = [c for c in cams if c is not primary]
     extras_lines: list[str] = []
     extra_indices: list[str] = []
     for c in extras:

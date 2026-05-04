@@ -87,35 +87,8 @@
             </div>
           </div>
 
-          <div class="col-md-6">
-            <label class="form-label">Extra USB Camera Indices</label>
-            <input type="text" name="usb_camera_indices"
-                   class="form-control bg-secondary border-secondary text-light"
-                   placeholder="1,2"
-                   value="{{ settings.usb_camera_indices or '' }}">
-            <div class="form-text text-muted">
-              Optional extra V4L2 camera indices for live grid and detection.
-            </div>
-          </div>
-
-          <div class="col-md-6">
-            <input type="hidden" name="usb_camera_auto_discover" value="false">
-            <div class="form-check form-switch mt-md-4 pt-md-2">
-              <input class="form-check-input" type="checkbox" id="usb_camera_auto_discover"
-                     name="usb_camera_auto_discover" value="true"
-                     {{ 'checked' if settings.usb_camera_auto_discover != 'false' else '' }}>
-              <label class="form-check-label" for="usb_camera_auto_discover">
-                Auto-discover USB cameras
-              </label>
-            </div>
-          </div>
-
-          <div class="col-md-6">
-            <label class="form-label">USB Scan Limit</label>
-            <input type="number" step="1" min="1" max="32" name="usb_camera_scan_limit"
-                   class="form-control bg-secondary border-secondary text-light"
-                   value="{{ settings.usb_camera_scan_limit or '8' }}">
-          </div>
+          <input type="hidden" name="usb_camera_auto_discover" value="false">
+          <input type="hidden" name="usb_camera_scan_limit" value="0">
 
           <div class="col-12">
             <input type="hidden" name="multi_camera_detection_enabled" value="false">

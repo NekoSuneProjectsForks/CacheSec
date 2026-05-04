@@ -58,13 +58,13 @@ UNKNOWN_COOLDOWN_SECONDS: int = _int("UNKNOWN_COOLDOWN_SECONDS", 10)
 NIGHT_VISION_MODE: str = os.getenv("NIGHT_VISION_MODE", "auto").strip().lower()
 if NIGHT_VISION_MODE not in {"auto", "force_off"}:
     NIGHT_VISION_MODE = "auto"
-CAMERA_PREFERRED_SOURCE: str = os.getenv("CAMERA_PREFERRED_SOURCE", "webcam").strip().lower()
-if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect", "ip", "tapo"}:
-    CAMERA_PREFERRED_SOURCE = "webcam"
+CAMERA_PREFERRED_SOURCE: str = os.getenv("CAMERA_PREFERRED_SOURCE", "none").strip().lower()
+if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect", "ip", "tapo", "none"}:
+    CAMERA_PREFERRED_SOURCE = "none"
 USB_CAMERA_INDICES: str = os.getenv("USB_CAMERA_INDICES", "").strip()
-USB_CAMERA_AUTO_DISCOVER: bool = _bool("USB_CAMERA_AUTO_DISCOVER", True)
-USB_CAMERA_SCAN_LIMIT: int = _int("USB_CAMERA_SCAN_LIMIT", 8)
-MULTI_CAMERA_DETECTION_ENABLED: bool = _bool("MULTI_CAMERA_DETECTION_ENABLED", True)
+USB_CAMERA_AUTO_DISCOVER: bool = _bool("USB_CAMERA_AUTO_DISCOVER", False)
+USB_CAMERA_SCAN_LIMIT: int = _int("USB_CAMERA_SCAN_LIMIT", 0)
+MULTI_CAMERA_DETECTION_ENABLED: bool = _bool("MULTI_CAMERA_DETECTION_ENABLED", False)
 IP_CAMERA_URL: str = os.getenv("IP_CAMERA_URL", "").strip()
 IP_CAMERA_URLS: str = os.getenv("IP_CAMERA_URLS", "").strip()
 IP_CAMERA_RTSP_TRANSPORT: str = os.getenv("IP_CAMERA_RTSP_TRANSPORT", "tcp").strip().lower()

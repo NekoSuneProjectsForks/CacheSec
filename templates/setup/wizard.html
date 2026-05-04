@@ -75,23 +75,19 @@
         {% for cam in cams %}
         <div class="d-flex justify-content-between align-items-center border border-secondary rounded p-2 mb-2">
           <div class="me-2 flex-grow-1 text-truncate">
-            <div class="fw-semibold text-truncate">
-              {{ cam.label or cam.describe }}
-              {% if cam.detection %}
-                <span class="badge bg-danger ms-2">Detection</span>
-              {% endif %}
-            </div>
+            <div class="fw-semibold text-truncate">{{ cam.label or cam.describe }}</div>
             <div class="small text-muted text-truncate">{{ cam.describe }}</div>
           </div>
-          <div class="d-flex gap-1">
-            {% if not cam.detection %}
-            <form method="POST" action="{{ url_for('setup.set_detection') }}" class="m-0">
+          <div class="d-flex gap-2 align-items-center">
+            <form method="POST" action="{{ url_for('setup.toggle_detection') }}" class="m-0">
               <input type="hidden" name="id" value="{{ cam.id }}">
-              <button type="submit" class="btn btn-sm btn-outline-light" title="Use for detection">
-                <i class="bi bi-bullseye"></i>
-              </button>
+              <div class="form-check form-switch m-0" title="Run face detection on this camera">
+                <input class="form-check-input" type="checkbox"
+                       onchange="this.form.submit()"
+                       {% if cam.detection %}checked{% endif %}>
+                <label class="form-check-label small text-light">Detection</label>
+              </div>
             </form>
-            {% endif %}
             <form method="POST" action="{{ url_for('setup.remove_camera') }}" class="m-0">
               <input type="hidden" name="id" value="{{ cam.id }}">
               <button type="submit" class="btn btn-sm btn-outline-danger" title="Remove">

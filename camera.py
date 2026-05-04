@@ -824,22 +824,33 @@ class CameraLoop:
             )
             return new_cap
 
+        if preferred_source == "none":
+            _camera_status["source"] = "none"
+            _camera_status["error"] = ""
+            logger.info("No detection camera configured — camera loop idle. "
+                        "Add a camera in Settings and enable detection to start.")
+            _camera_status["running"] = False
+            recorder.stop_background()
+            return
+
         if preferred_source in {"webcam", "ip", "tapo"}:
             _camera_status["source"] = primary_source_label()
             cap = try_open_primary_source()
             if cap is None:
-                logger.warning("Preferred %s camera unavailable; trying Kinect fallback", primary_source_label())
-                use_kinect = start_kinect_source()
-                _camera_status["error"] = "" if use_kinect else _camera_status["error"]
-            else:
-                logger.info("Using %s as camera source", primary_source_label())
-        else:
+                # Don't silently fall back to a different device — the user
+                # picked this one explicitly. Surface the error and stop.
+                logger.error("Preferred %s camera unavailable; not falling back.", primary_source_label())
+                _camera_status["running"] = False
+                recorder.stop_background()
+                return
+            logger.info("Using %s as camera source", primary_source_label())
+        elif preferred_source == "kinect":
             use_kinect = start_kinect_source()
             if not use_kinect:
-                _camera_status["source"] = "webcam"
-                cap = self.__try_open()
-                if cap is not None:
-                    logger.info("Using webcam as camera source")
+                logger.error("Kinect requested but unavailable; not falling back.")
+                _camera_status["running"] = False
+                recorder.stop_background()
+                return
 
         if cap is None and not use_kinect:
             _camera_status["running"] = False
@@ -1137,20 +1148,24 @@ def _live_bool_setting(key: str, default: bool = False) -> bool:
 
 
 def _live_camera_preferred_source() -> str:
+    """Returns the configured primary detection source.
+
+    "none" means the user hasn't enabled detection on any camera; the loop
+    must NOT silently fall back to /dev/video0.
+    """
     source = _live_setting("camera_preferred_source", config.CAMERA_PREFERRED_SOURCE)
     source = source.strip().lower()
-    return source if source in {"webcam", "ip", "kinect", "tapo"} else "webcam"
+    return source if source in {"webcam", "ip", "kinect", "tapo", "none"} else "none"
 
 
 def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSourceSpec]:
     preferred = preferred or _live_camera_preferred_source()
     specs: list[_CameraSourceSpec] = []
 
-    # If the primary detector is not using the configured local camera, expose
-    # it as a separate camera. Additional USB indices are always auxiliary.
+    # USB indices are only exposed when the user explicitly configured them
+    # in `usb_camera_indices`. Don't probe `/dev/video0` just because
+    # CAMERA_INDEX has a default value.
     usb_indices = _configured_usb_indices()
-    if preferred != "webcam" and config.CAMERA_INDEX not in usb_indices:
-        usb_indices.insert(0, config.CAMERA_INDEX)
     for index in usb_indices:
         if preferred == "webcam" and index == config.CAMERA_INDEX:
             continue
