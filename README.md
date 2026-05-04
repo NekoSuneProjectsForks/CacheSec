@@ -18,6 +18,8 @@ admin dashboard accessible locally or remotely through Cloudflare Tunnel.
 | Alerts | Discord webhook with snapshot image attachment and optional video upload |
 | Recording | Auto-start/stop with min/max duration enforcement; local saving and microphone audio are configurable |
 | Multi-camera detection | Extra USB, Kinect, and IP cameras can run the same detection loop as the primary feed |
+| Camera management | `+ Add Camera` modal with per-type fields (USB / Pi, IP / RTSP, Kinect, Tapo); per-row edit and remove for live-only feeds |
+| TP-Link Tapo support | Native source type with PTZ (pan/tilt) overlay, presets, and privacy-mode toggle on the live feed |
 | Optional object detection | Detectron2 can detect people, pets/animals, or all COCO objects when installed separately |
 | Motion detection | Frame-difference moving-object detection can be enabled per camera |
 | Sound | GPIO PWM buzzer (access-denied tone on unknown) |
@@ -40,6 +42,7 @@ cachesec/
 ├── camera.py               # Camera capture + detection loop
 ├── recognition.py          # InsightFace embedding + matching
 ├── recorder.py             # Video recording state machine
+├── tapo_control.py         # pytapo wrapper: PTZ, presets, privacy mode
 ├── discord_notify.py       # Discord webhook integration
 ├── sound.py                # GPIO buzzer abstraction
 ├── sounds.py               # Original GPIO tone primitives
@@ -122,7 +125,7 @@ nano .env
 | `SECRET_KEY` | Generate with: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL |
 | `DISCORD_MENTION_EVERYONE` | Set `true` to include `@everyone` in unknown Discord alerts; defaults to `false` |
-| `CAMERA_PREFERRED_SOURCE` | Use `webcam`, `kinect`, or `ip` |
+| `CAMERA_PREFERRED_SOURCE` | Use `webcam`, `kinect`, `ip`, or `tapo` |
 | `USB_CAMERA_AUTO_DISCOVER` | Automatically discover `/dev/video*` cameras for grid and detection |
 | `USB_CAMERA_INDICES` | Optional comma-separated extra USB/V4L2 indices to show and detect on |
 | `MULTI_CAMERA_DETECTION_ENABLED` | Set `true` to run detection on auxiliary USB, Kinect, and IP feeds |
@@ -135,6 +138,10 @@ nano .env
 | `MOVING_OBJECT_DETECTION_ENABLED` | Optional motion-box detection on all detection feeds |
 | `VIDEO_ENCODER` | `auto`, `libx264`, `h264_nvenc`, `hevc_nvenc`, or `h264_qsv` |
 | `IP_CAMERA_ONVIF_HOST` / `IP_CAMERA_ONVIF_PORT` | Optional ONVIF endpoint override if the control port differs from the stream URL |
+| `TAPO_HOST` | LAN IP / hostname of the Tapo camera (e.g. `192.168.1.60`) |
+| `TAPO_USERNAME` / `TAPO_PASSWORD` | "Camera Account" credentials set in the Tapo app under *Advanced Settings → Camera Account* (NOT the cloud login) |
+| `TAPO_CLOUD_PASSWORD` | Optional Tapo cloud password — required by some firmware versions for PTZ/preset commands |
+| `TAPO_STREAM` | `stream1` (high) or `stream2` (low) |
 | `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
 | `RECORD_AUDIO_ENABLED` | Optional microphone/IP-camera audio capture for recordings; defaults to `false` |
 | `SESSION_COOKIE_SECURE` | `true` if behind Cloudflare HTTPS, `false` for LAN-only HTTP |
@@ -349,6 +356,36 @@ changes, or build locally with:
 docker compose build --no-cache
 docker compose up -d
 ```
+
+### TP-Link Tapo cameras
+
+CacheSec speaks the Tapo C-series local HTTP API via [pytapo](https://pypi.org/project/pytapo/)
+for PTZ, presets, and privacy mode. Streaming itself uses the camera's
+built-in RTSP feed. No host device passthrough is needed — Tapo cameras are
+on the LAN.
+
+**One-time setup on the camera:**
+
+1. Open the Tapo app and go to your camera → **Advanced Settings → Camera Account**.
+2. Enable the camera account and set a username (default `admin`) + password.
+   This is **not** the same as the Tapo cloud login.
+
+**In CacheSec:**
+
+1. Open **Settings**, click **Change** next to *Primary Detection Camera*.
+2. Pick **Tapo**, fill in the IP, camera-account user/password, and (optional)
+   the cloud password if your firmware requires it for PTZ.
+3. Save and restart the app.
+
+The live-feed page shows a PTZ overlay on the top-right of the Tapo feed:
+
+- Press-and-hold arrow buttons to pan/tilt; release to stop.
+- Preset dropdown — runs presets configured in the Tapo app.
+- Privacy switch — toggles the camera's hardware privacy shutter.
+
+Tapo cameras flip their own IR-cut filter automatically, so CacheSec disables
+the software green-tint night-vision overlay on Tapo feeds.
+
 
 To build a smaller image without Kinect support:
 
