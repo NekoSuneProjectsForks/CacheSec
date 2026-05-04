@@ -48,6 +48,8 @@ class RecordingState(NamedTuple):
     event_id: int | None
     filename: str           # final .mp4 filename (may still be encoding)
     duration_seconds: float
+    source_id: str = "primary"
+    source_label: str = "Primary Detection Feed"
 
 
 class Recorder:
@@ -66,7 +68,7 @@ class Recorder:
     """
 
     def __init__(self):
-        self._frame_q:   queue.Queue[np.ndarray | None] = queue.Queue(maxsize=64)
+        self._frame_q:   queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(maxsize=64)
         self._cmd_q:     queue.Queue[tuple]              = queue.Queue()
         self._state_lock = threading.Lock()
 
@@ -83,10 +85,13 @@ class Recorder:
         self._record_audio      = config.RECORD_AUDIO_ENABLED
         self._audio_path        = ""
         self._audio_process: subprocess.Popen | None = None
+        self._audio_source_override = ""
         self._frame_count       = 0
         self._avi_fps           = 15.0
         self._first_frame_time  = 0.0
         self._last_frame_time   = 0.0
+        self._source_id         = "primary"
+        self._source_label      = "Primary Detection Feed"
 
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
@@ -95,15 +100,21 @@ class Recorder:
     # Public API
     # ------------------------------------------------------------------
 
-    def signal_unknown_visible(self, event_id: int | None) -> None:
-        self._cmd_q.put(("visible", event_id))
+    def signal_unknown_visible(
+        self,
+        event_id: int | None,
+        source_id: str = "primary",
+        source_label: str = "Primary Detection Feed",
+        audio_source: str = "",
+    ) -> None:
+        self._cmd_q.put(("visible", event_id, source_id, source_label, audio_source))
 
-    def signal_unknown_gone(self) -> None:
-        self._cmd_q.put(("gone", None))
+    def signal_unknown_gone(self, source_id: str = "primary") -> None:
+        self._cmd_q.put(("gone", None, source_id, "", ""))
 
-    def push_frame(self, frame: np.ndarray) -> None:
+    def push_frame(self, frame: np.ndarray, source_id: str = "primary") -> None:
         try:
-            self._frame_q.put_nowait(frame)
+            self._frame_q.put_nowait((source_id, frame))
         except queue.Full:
             pass
 
@@ -115,9 +126,13 @@ class Recorder:
                 event_id=self._event_id,
                 filename=self._mp4_filename,
                 duration_seconds=round(dur, 1),
+                source_id=self._source_id,
+                source_label=self._source_label,
             )
 
     def start_background(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
         self._stop_flag.clear()
         self._thread = threading.Thread(target=self._run, daemon=True, name="Recorder")
         self._thread.start()
@@ -125,7 +140,7 @@ class Recorder:
 
     def stop_background(self, timeout: float = 5.0) -> None:
         self._stop_flag.set()
-        self._cmd_q.put(("stop", None))
+        self._cmd_q.put(("stop", None, "", "", ""))
         if self._thread:
             self._thread.join(timeout=timeout)
         self._finalise_recording()
@@ -142,36 +157,58 @@ class Recorder:
             # Drain command queue
             while True:
                 try:
-                    cmd, arg = self._cmd_q.get_nowait()
+                    item = self._cmd_q.get_nowait()
                 except queue.Empty:
                     break
+                cmd = item[0]
+                arg = item[1] if len(item) > 1 else None
+                source_id = item[2] if len(item) > 2 and item[2] else "primary"
+                source_label = item[3] if len(item) > 3 and item[3] else "Primary Detection Feed"
+                audio_source = item[4] if len(item) > 4 else ""
 
                 if cmd == "visible":
-                    unknown_visible         = True
-                    self._last_visible_time = time.monotonic()
                     if not self._is_recording:
-                        self._start_recording(arg)
-                    elif arg is not None and self._event_id != arg:
-                        with self._state_lock:
-                            self._event_id = arg
+                        unknown_visible         = True
+                        self._last_visible_time = time.monotonic()
+                        self._start_recording(arg, source_id, source_label, audio_source)
+                    elif self._source_id == source_id:
+                        unknown_visible         = True
+                        self._last_visible_time = time.monotonic()
+                        if arg is not None and self._event_id != arg:
+                            with self._state_lock:
+                                self._event_id = arg
 
                 elif cmd == "gone":
-                    unknown_visible = False
+                    if self._source_id == source_id:
+                        unknown_visible = False
 
                 elif cmd == "stop":
                     return
 
+            active_source_id = self._source_id
+
             if self._is_recording:
                 try:
-                    frame = self._frame_q.get(timeout=0.05)
-                    if self._writer and frame is not None:
+                    item = self._frame_q.get(timeout=0.05)
+                    frame_source_id, frame = item if item is not None else ("", None)
+                    if (
+                        frame_source_id == active_source_id
+                        and self._writer
+                        and frame is not None
+                    ):
+                        frame = _normalise_recording_frame(frame)
+                        audio_process = None
+                        audio_source = ""
                         if (
                             self._record_audio
                             and self._audio_path
                             and self._audio_process is None
                             and self._frame_count == 0
                         ):
-                            audio_process, audio_source = _start_audio_capture(self._audio_path)
+                            audio_process, audio_source = _start_audio_capture(
+                                self._audio_path,
+                                self._audio_source_override,
+                            )
                             with self._state_lock:
                                 if audio_process:
                                     self._audio_process = audio_process
@@ -217,16 +254,26 @@ class Recorder:
     # Recording helpers
     # ------------------------------------------------------------------
 
-    def _start_recording(self, event_id: int | None) -> None:
+    def _start_recording(
+        self,
+        event_id: int | None,
+        source_id: str = "primary",
+        source_label: str = "Primary Detection Feed",
+        audio_source: str = "",
+    ) -> None:
         Path(config.RECORDINGS_DIR).mkdir(parents=True, exist_ok=True)
         ts          = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        mp4_fname   = f"unknown_{ts}.mp4"
-        avi_path    = str(Path(config.RECORDINGS_DIR) / f"unknown_{ts}.avi")
+        source_fragment = _safe_filename_fragment(source_id)
+        prefix = "continuous" if event_id is None else "unknown"
+        if source_fragment and source_fragment != "primary":
+            prefix = f"{prefix}_{source_fragment}"
+        mp4_fname   = f"{prefix}_{ts}.mp4"
+        avi_path    = str(Path(config.RECORDINGS_DIR) / f"{prefix}_{ts}.avi")
         min_duration = _int_setting("min_recording_seconds", config.MIN_RECORDING_SECONDS)
         max_duration = _int_setting("max_recording_seconds", config.MAX_RECORDING_SECONDS)
         save_locally = _bool_setting("save_recordings_locally", config.SAVE_RECORDINGS_LOCALLY)
         record_audio = _bool_setting("record_audio_enabled", config.RECORD_AUDIO_ENABLED)
-        audio_path = str(Path(config.RECORDINGS_DIR) / f"unknown_{ts}.wav") if record_audio else ""
+        audio_path = str(Path(config.RECORDINGS_DIR) / f"{prefix}_{ts}.wav") if record_audio else ""
 
         # MJPEG into AVI — always works with OpenCV's bundled ffmpeg
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
@@ -254,14 +301,17 @@ class Recorder:
             self._record_audio      = record_audio
             self._audio_path        = audio_path
             self._audio_process     = None
+            self._audio_source_override = audio_source
             self._frame_count       = 0
             self._avi_fps           = fps
             self._first_frame_time  = 0.0
             self._last_frame_time   = 0.0
+            self._source_id         = source_id
+            self._source_label      = source_label
 
         logger.info(
-            "Recording started (MJPEG/AVI): %s  event=%s  save_locally=%s  audio=%s",
-            avi_path, str(event_id), save_locally, "pending" if record_audio else "off",
+            "Recording started (MJPEG/AVI): %s  event=%s  source=%s  save_locally=%s  audio=%s",
+            avi_path, str(event_id), source_label, save_locally, "pending" if record_audio else "off",
         )
 
         started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -272,6 +322,8 @@ class Recorder:
             fields["recording_path"] = mp4_path
         else:
             notes.append("Recording will be uploaded to Discord only.")
+        if source_label and source_label != "Primary Detection Feed":
+            notes.append(f"Camera: {source_label}.")
         if notes:
             fields["notes"] = " ".join(notes)
         self._update_event_recording(event_id, **fields)
@@ -292,6 +344,8 @@ class Recorder:
             avi_fps     = self._avi_fps
             first_frame_time = self._first_frame_time
             last_frame_time = self._last_frame_time
+            source_id   = self._source_id
+            source_label = self._source_label
             self._is_recording  = False
             self._writer        = None
             self._event_id      = None
@@ -299,9 +353,12 @@ class Recorder:
             self._mp4_filename  = ""
             self._audio_path    = ""
             self._audio_process = None
+            self._audio_source_override = ""
             self._frame_count   = 0
             self._first_frame_time = 0.0
             self._last_frame_time = 0.0
+            self._source_id     = "primary"
+            self._source_label  = "Primary Detection Feed"
 
         elapsed_duration = round(time.monotonic() - start, 3)
         frame_duration = _frame_wall_duration(
@@ -321,7 +378,10 @@ class Recorder:
 
         ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        logger.info("Raw recording closed: %s  duration=%.1fs", avi_path, duration)
+        logger.info(
+            "Raw recording closed: %s  source=%s  duration=%.1fs",
+            avi_path, source_label or source_id, duration,
+        )
 
         if event_id is not None:
             self._update_event_recording(event_id, recording_end=ended_at, ended_at=ended_at)
@@ -396,39 +456,44 @@ class Recorder:
             duration,
             video_filter or "none",
         )
-        cmd = [
-            ffmpeg, "-y",
-            "-i",       avi_path,
-        ]
-        if audio_path:
-            cmd += ["-i", audio_path]
-        cmd += [
-            "-c:v",     "libx264",
-            "-preset",  "veryfast",   # fast enough for Pi; change to 'faster' for quality
-            "-crf",     "26",         # quality (18=lossless, 28=medium, 23=default)
-            "-movflags", "+faststart", # moov atom at front — essential for browser streaming
-        ]
-        if video_filter:
-            cmd += ["-vf", video_filter]
-        if audio_path:
-            cmd += [
-                "-af", "aresample=async=1:first_pts=0",
-                "-c:a", "aac",
-                "-b:a", "96k",
-                "-ac", "1",
-                "-shortest",
-            ]
-        else:
-            cmd += ["-an"]  # no audio track
-        cmd.append(mp4_path)
+        encoder = _select_video_encoder(ffmpeg)
+        cmd = _build_reencode_command(
+            ffmpeg=ffmpeg,
+            avi_path=avi_path,
+            mp4_path=mp4_path,
+            audio_path=audio_path,
+            video_filter=video_filter,
+            encoder=encoder,
+        )
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=300
             )
+            if result.returncode != 0 and encoder != "libx264":
+                logger.warning(
+                    "ffmpeg %s encode failed; retrying with libx264:\n%s",
+                    encoder,
+                    result.stderr[-1000:],
+                )
+                encoder = "libx264"
+                cmd = _build_reencode_command(
+                    ffmpeg=ffmpeg,
+                    avi_path=avi_path,
+                    mp4_path=mp4_path,
+                    audio_path=audio_path,
+                    video_filter=video_filter,
+                    encoder=encoder,
+                )
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=300
+                )
             if result.returncode == 0:
                 mp4_size = _file_size(mp4_path)
                 logger.info(
-                    "Re-encode complete: %s (%.1f MB)", mp4_fname, mp4_size / 1e6
+                    "Re-encode complete: %s (%.1f MB, encoder=%s)",
+                    mp4_fname,
+                    mp4_size / 1e6,
+                    encoder,
                 )
                 # Remove the temp AVI
                 try:
@@ -550,6 +615,102 @@ def _file_size(path: str) -> int:
         return 0
 
 
+def _normalise_recording_frame(frame: np.ndarray) -> np.ndarray:
+    target = (config.FRAME_WIDTH, config.FRAME_HEIGHT)
+    if frame.shape[1] == target[0] and frame.shape[0] == target[1]:
+        return frame
+    return cv2.resize(frame, target)
+
+
+def _safe_filename_fragment(value: str) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_-]+", "_", text)
+    return text.strip("_")[:40] or "primary"
+
+
+def _select_video_encoder(ffmpeg: str) -> str:
+    requested = _runtime_setting("video_encoder", config.VIDEO_ENCODER).strip().lower()
+    if requested not in {"auto", "libx264", "h264_nvenc", "hevc_nvenc", "h264_qsv"}:
+        requested = "auto"
+
+    if requested != "auto":
+        return requested if _ffmpeg_encoder_available(ffmpeg, requested) else "libx264"
+
+    for candidate in ("h264_nvenc", "libx264"):
+        if _ffmpeg_encoder_available(ffmpeg, candidate):
+            return candidate
+    return "libx264"
+
+
+def _ffmpeg_encoder_available(ffmpeg: str, encoder: str) -> bool:
+    if encoder == "libx264":
+        return True
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return False
+    return encoder in result.stdout
+
+
+def _build_reencode_command(
+    ffmpeg: str,
+    avi_path: str,
+    mp4_path: str,
+    audio_path: str,
+    video_filter: str,
+    encoder: str,
+) -> list[str]:
+    cmd = [ffmpeg, "-y", "-i", avi_path]
+    if audio_path:
+        cmd += ["-i", audio_path]
+
+    quality = max(0, min(51, _int_setting("video_encoder_quality", config.VIDEO_ENCODER_QUALITY)))
+    preset = _runtime_setting("video_encoder_preset", config.VIDEO_ENCODER_PRESET).strip() or "fast"
+
+    if encoder in {"h264_nvenc", "hevc_nvenc"}:
+        cmd += [
+            "-c:v", encoder,
+            "-preset", preset,
+            "-cq", str(quality),
+            "-b:v", "0",
+            "-movflags", "+faststart",
+        ]
+    elif encoder == "h264_qsv":
+        cmd += [
+            "-c:v", "h264_qsv",
+            "-global_quality", str(quality),
+            "-preset", preset,
+            "-movflags", "+faststart",
+        ]
+    else:
+        cmd += [
+            "-c:v", "libx264",
+            "-preset", preset if preset in {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"} else "veryfast",
+            "-crf", str(quality),
+            "-movflags", "+faststart",
+        ]
+
+    if video_filter:
+        cmd += ["-vf", video_filter]
+    if audio_path:
+        cmd += [
+            "-af", "aresample=async=1:first_pts=0",
+            "-c:a", "aac",
+            "-b:a", "96k",
+            "-ac", "1",
+            "-shortest",
+        ]
+    else:
+        cmd += ["-an"]
+    cmd.append(mp4_path)
+    return cmd
+
+
 def _timeline_video_filter(frame_count: int, duration: float, avi_fps: float) -> str:
     """
     OpenCV writes AVI timestamps at a fixed FPS even if frames arrive faster or
@@ -609,7 +770,10 @@ def _runtime_setting(key: str, default: str = "") -> str:
     return value if value is not None else default
 
 
-def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]:
+def _start_audio_capture(
+    audio_path: str,
+    source_override: str = "",
+) -> tuple[subprocess.Popen | None, str]:
     if not audio_path:
         return None, ""
 
@@ -618,7 +782,7 @@ def _start_audio_capture(audio_path: str) -> tuple[subprocess.Popen | None, str]
         logger.warning("Audio recording requested but ffmpeg is not available")
         return None, ""
 
-    source = _audio_input_source()
+    source = source_override.strip() or _audio_input_source()
     if not source:
         logger.warning("Audio recording requested but no microphone was detected")
         return None, ""

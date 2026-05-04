@@ -30,6 +30,7 @@
                    value="{{ settings.frame_skip or '3' }}">
           </div>
 
+<<<<<<< HEAD
           {% set source = settings.camera_preferred_source or 'webcam' %}
           {% set source_labels = {
             'webcam': 'USB / Pi Camera',
@@ -70,6 +71,148 @@
                 <span class="badge bg-secondary text-uppercase" id="primary-camera-kind">{{ source }}</span>
               </div>
             </div>
+=======
+          <div class="col-md-6">
+            <label class="form-label">Night Vision Mode</label>
+            <select name="night_vision_mode"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set nv_mode = settings.night_vision_mode or 'auto' %}
+              <option value="auto" {{ 'selected' if nv_mode == 'auto' else '' }}>Auto</option>
+              <option value="force_off" {{ 'selected' if nv_mode == 'force_off' else '' }}>Force off</option>
+            </select>
+            <div class="form-text text-muted">
+              Force off keeps USB software night vision and Kinect IR switching disabled.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Camera Source</label>
+            <select name="camera_preferred_source"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set source = settings.camera_preferred_source or 'webcam' %}
+              <option value="webcam" {{ 'selected' if source == 'webcam' else '' }}>USB / Pi Camera</option>
+              <option value="ip" {{ 'selected' if source == 'ip' else '' }}>IP Camera / RTSP</option>
+              <option value="kinect" {{ 'selected' if source == 'kinect' else '' }}>Kinect</option>
+            </select>
+            <div class="form-text text-muted">
+              Saved camera changes reload the capture pipeline without restarting Docker.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Extra USB Camera Indices</label>
+            <input type="text" name="usb_camera_indices"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="1,2"
+                   value="{{ settings.usb_camera_indices or '' }}">
+            <div class="form-text text-muted">
+              Optional extra V4L2 camera indices for live grid and detection.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <input type="hidden" name="usb_camera_auto_discover" value="false">
+            <div class="form-check form-switch mt-md-4 pt-md-2">
+              <input class="form-check-input" type="checkbox" id="usb_camera_auto_discover"
+                     name="usb_camera_auto_discover" value="true"
+                     {{ 'checked' if settings.usb_camera_auto_discover != 'false' else '' }}>
+              <label class="form-check-label" for="usb_camera_auto_discover">
+                Auto-discover USB cameras
+              </label>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">USB Scan Limit</label>
+            <input type="number" step="1" min="1" max="32" name="usb_camera_scan_limit"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.usb_camera_scan_limit or '8' }}">
+          </div>
+
+          <div class="col-12">
+            <input type="hidden" name="multi_camera_detection_enabled" value="false">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="multi_camera_detection_enabled"
+                     name="multi_camera_detection_enabled" value="true"
+                     {{ 'checked' if settings.multi_camera_detection_enabled != 'false' else '' }}>
+              <label class="form-check-label" for="multi_camera_detection_enabled">
+                Run detection on extra USB, Kinect, and IP cameras
+              </label>
+            </div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Object Detector</label>
+            <select name="object_detection_backend"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set object_backend = settings.object_detection_backend or settings.person_detection_backend or 'disabled' %}
+              <option value="disabled" {{ 'selected' if object_backend == 'disabled' else '' }}>Disabled</option>
+              <option value="detectron2" {{ 'selected' if object_backend == 'detectron2' else '' }}>Detectron2</option>
+            </select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Object Mode</label>
+            <select name="object_detection_mode"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set object_mode = settings.object_detection_mode or 'people_pets' %}
+              <option value="person" {{ 'selected' if object_mode == 'person' else '' }}>Person only</option>
+              <option value="people_pets" {{ 'selected' if object_mode == 'people_pets' else '' }}>People + pets/animals</option>
+              <option value="all" {{ 'selected' if object_mode == 'all' else '' }}>All COCO objects</option>
+            </select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Object Threshold</label>
+            <input type="number" step="0.01" min="0.05" max="0.99" name="object_detection_threshold"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.object_detection_threshold or settings.person_detection_threshold or '0.75' }}">
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Object Device</label>
+            <select name="object_detection_device"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set object_device = settings.object_detection_device or settings.person_detection_device or 'auto' %}
+              <option value="auto" {{ 'selected' if object_device == 'auto' else '' }}>Auto</option>
+              <option value="cpu" {{ 'selected' if object_device == 'cpu' else '' }}>CPU</option>
+              <option value="cuda" {{ 'selected' if object_device == 'cuda' else '' }}>CUDA</option>
+            </select>
+          </div>
+
+          <div class="col-md-4">
+            <input type="hidden" name="moving_object_detection_enabled" value="false">
+            <div class="form-check form-switch mt-md-4 pt-md-2">
+              <input class="form-check-input" type="checkbox" id="moving_object_detection_enabled"
+                     name="moving_object_detection_enabled" value="true"
+                     {{ 'checked' if settings.moving_object_detection_enabled == 'true' else '' }}>
+              <label class="form-check-label" for="moving_object_detection_enabled">
+                Moving object detection
+              </label>
+            </div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Motion Min Area</label>
+            <input type="number" step="100" min="100" max="100000" name="moving_object_min_area"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.moving_object_min_area or '2500' }}">
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Motion Threshold</label>
+            <input type="number" step="1" min="1" max="255" name="moving_object_threshold"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.moving_object_threshold or '25' }}">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">IP Camera URL</label>
+            <input type="url" name="ip_camera_url"
+                   class="form-control bg-secondary border-secondary text-light"
+                   placeholder="rtsp://user:pass@192.168.1.50:554/stream1"
+                   value="{{ settings.ip_camera_url or '' }}">
+>>>>>>> 65353f1f75e1ff39789b056ad5fdef4aa75a0581
             <div class="form-text text-muted">
               Restart CacheSec after changing the primary camera source.
             </div>
@@ -110,6 +253,7 @@
               {% set onvif_mode = settings.ip_camera_onvif_night_mode or 'disabled' %}
               <option value="disabled" {{ 'selected' if onvif_mode == 'disabled' else '' }}>Disabled</option>
               <option value="detect" {{ 'selected' if onvif_mode == 'detect' else '' }}>Detect darkness and switch IR-cut</option>
+              <option value="force_off" {{ 'selected' if onvif_mode == 'force_off' else '' }}>Force IR-cut on / night off</option>
             </select>
             <div class="form-text text-muted">
               Uses ONVIF Imaging <code>IrCutFilter</code> control for the primary IP camera. Requires an ONVIF-capable camera and the <code>onvif-zeep</code> package.
@@ -193,6 +337,33 @@
                    value="{{ settings.max_recording_seconds or '5400' }}">
           </div>
 
+          <div class="col-md-4">
+            <label class="form-label">Video Encoder</label>
+            <select name="video_encoder"
+                    class="form-select bg-secondary border-secondary text-light">
+              {% set encoder = settings.video_encoder or 'auto' %}
+              <option value="auto" {{ 'selected' if encoder == 'auto' else '' }}>Auto GPU/CPU</option>
+              <option value="libx264" {{ 'selected' if encoder == 'libx264' else '' }}>CPU H.264</option>
+              <option value="h264_nvenc" {{ 'selected' if encoder == 'h264_nvenc' else '' }}>NVIDIA H.264 NVENC</option>
+              <option value="hevc_nvenc" {{ 'selected' if encoder == 'hevc_nvenc' else '' }}>NVIDIA H.265 NVENC</option>
+              <option value="h264_qsv" {{ 'selected' if encoder == 'h264_qsv' else '' }}>Intel Quick Sync H.264</option>
+            </select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Encoder Preset</label>
+            <input type="text" name="video_encoder_preset"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.video_encoder_preset or 'fast' }}">
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Encoder Quality</label>
+            <input type="number" step="1" min="0" max="51" name="video_encoder_quality"
+                   class="form-control bg-secondary border-secondary text-light"
+                   value="{{ settings.video_encoder_quality or '26' }}">
+          </div>
+
           <div class="col-12">
             <input type="hidden" name="record_all_mode" value="false">
             <div class="form-check form-switch">
@@ -200,11 +371,11 @@
                      name="record_all_mode" value="true"
                      {{ 'checked' if settings.record_all_mode == 'true' else '' }}>
               <label class="form-check-label" for="record_all_mode">
-                Record continuously (all activity, not only unknown alerts)
+                Record full length continuously (not only unknown clips)
               </label>
             </div>
             <div class="form-text text-muted">
-              When enabled, CacheSec keeps recording the primary detection feed continuously and rolls clips based on the max recording duration.
+              When enabled, CacheSec keeps recording the primary detection feed with optional audio and rolls files based on the max recording duration.
             </div>
           </div>
 

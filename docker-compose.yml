@@ -1,7 +1,16 @@
 services:
   cachesec:
     container_name: cachesec
-    image: ${CACHESEC_IMAGE:-cachesec:kinect}
+    image: ${CACHESEC_IMAGE:-cachesec:main}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_KINECT: ${INSTALL_KINECT:-true}
+        INSTALL_DETECTRON2: ${INSTALL_DETECTRON2:-false}
+        # CPU wheels by default. For NVIDIA builds, set for example:
+        # TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     restart: unless-stopped
     ports:
       - "${CACHESEC_BIND_PORT:-5000}:5000"
@@ -18,10 +27,27 @@ services:
       UPLOAD_FOLDER: /data/uploads/faces
       LOG_FILE: /data/logs/cachesec.log
       HOME: /data
+      USB_CAMERA_AUTO_DISCOVER: ${USB_CAMERA_AUTO_DISCOVER:-true}
+      USB_CAMERA_SCAN_LIMIT: ${USB_CAMERA_SCAN_LIMIT:-8}
+      USB_CAMERA_INDICES: ${USB_CAMERA_INDICES:-}
+      MULTI_CAMERA_DETECTION_ENABLED: ${MULTI_CAMERA_DETECTION_ENABLED:-true}
+      NIGHT_VISION_MODE: ${NIGHT_VISION_MODE:-auto}
+      OBJECT_DETECTION_BACKEND: ${OBJECT_DETECTION_BACKEND:-disabled}
+      OBJECT_DETECTION_MODE: ${OBJECT_DETECTION_MODE:-people_pets}
+      OBJECT_DETECTION_THRESHOLD: ${OBJECT_DETECTION_THRESHOLD:-0.75}
+      OBJECT_DETECTION_DEVICE: ${OBJECT_DETECTION_DEVICE:-auto}
+      MOVING_OBJECT_DETECTION_ENABLED: ${MOVING_OBJECT_DETECTION_ENABLED:-false}
+      MOVING_OBJECT_MIN_AREA: ${MOVING_OBJECT_MIN_AREA:-2500}
+      MOVING_OBJECT_THRESHOLD: ${MOVING_OBJECT_THRESHOLD:-25}
+      VIDEO_ENCODER: ${VIDEO_ENCODER:-auto}
+      VIDEO_ENCODER_PRESET: ${VIDEO_ENCODER_PRESET:-fast}
+      VIDEO_ENCODER_QUALITY: ${VIDEO_ENCODER_QUALITY:-26}
     volumes:
       - cachesec-data:/data
       # Required for Kinect v1 / OpenKinect USB access.
       # - /dev/bus/usb:/dev/bus/usb
+      # Optional Intel/AMD VAAPI/Quick Sync device access.
+      # - /dev/dri:/dev/dri
     stop_grace_period: 30s
     # Required for Kinect v1 / OpenKinect USB access.
     # privileged: true
@@ -30,9 +56,16 @@ services:
     # (common on Raspberry Pi/libcamera systems). The app can keep CAMERA_INDEX=0
     # because the chosen host node is mapped to /dev/video0 inside the container.
     # devices:
-    #   - ${CACHESEC_VIDEO_DEVICE:-/dev/video0}:/dev/video0
+    #   - ${CACHESEC_VIDEO_DEVICE_0:-/dev/video0}:/dev/video0
+    #   - ${CACHESEC_VIDEO_DEVICE_1:-/dev/video1}:/dev/video1
+    #   - ${CACHESEC_VIDEO_DEVICE_2:-/dev/video2}:/dev/video2
+    #   - ${CACHESEC_VIDEO_DEVICE_3:-/dev/video3}:/dev/video3
     #   - ${CACHESEC_GPIO_DEVICE:-/dev/gpiochip0}:/dev/gpiochip0
     #   - /dev/snd:/dev/snd
+    # NVIDIA GPU users: install NVIDIA Container Toolkit on the host, then
+    # uncomment the next line and set OBJECT_DETECTION_DEVICE=cuda or
+    # VIDEO_ENCODER=h264_nvenc. CPU-only hosts should leave this commented.
+    # gpus: all
 
 volumes:
   cachesec-data:

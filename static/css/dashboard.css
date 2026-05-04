@@ -244,6 +244,14 @@ body {
   animation: blink 1.4s ease-in-out infinite;
 }
 
+.live-grid-img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  max-height: 40vh;
+  object-fit: contain;
+  background: #000;
+}
+
 /* ---- Enrolled face thumbnails ---- */
 .cs-thumb-card {
   position: relative;

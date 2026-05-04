@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -58,6 +59,8 @@ _camera_status      = {
     "sls_enabled":  config.SLS_ENABLED,
     "sls_active":   False,
     "depth":        False,
+    "multi_camera_detection": False,
+    "multi_camera_sources": 0,
 }
 
 # ---------------------------------------------------------------------------
@@ -97,42 +100,13 @@ def get_live_sources() -> list[dict]:
         "active": True,
         "detail": _camera_status.get("source", preferred),
     }]
-
-    # If detection is running from IP/Kinect, the local USB camera can still be
-    # opened as a separate live-only feed.
-    if preferred != "webcam":
+    for spec in _live_auxiliary_source_specs(preferred):
         sources.append({
-            "id": "webcam",
-            "label": f"USB / Pi Camera {config.CAMERA_INDEX}",
-            "kind": "webcam",
+            "id": spec.id,
+            "label": spec.label,
+            "kind": spec.kind,
             "active": False,
-            "detail": f"index {config.CAMERA_INDEX}",
-        })
-
-    # Expose Kinect as an explicit live-only source so operators can view
-    # Kinect and webcam side-by-side regardless of which source detection uses.
-    if config.KINECT_ENABLED:
-        try:
-            from kinect import kinect_available
-            has_kinect = kinect_available()
-        except Exception:
-            has_kinect = False
-        if has_kinect:
-            sources.append({
-                "id": "kinect",
-                "label": "Kinect v1",
-                "kind": "kinect",
-                "active": False,
-                "detail": "RGB/IR (hardware)",
-            })
-
-    for idx, item in enumerate(_configured_ip_sources(), start=1):
-        sources.append({
-            "id": f"ip{idx}",
-            "label": item["label"],
-            "kind": "ip",
-            "active": False,
-            "detail": _display_source_url(item["url"]),
+            "detail": spec.detail,
         })
 
     # Tapo as a separate switchable feed (so PTZ controls render even when
@@ -277,6 +251,18 @@ class FFmpegFrameCapture:
 CaptureHandle = cv2.VideoCapture | FFmpegFrameCapture
 
 
+@dataclass(slots=True)
+class _CameraSourceSpec:
+    id: str
+    label: str
+    kind: str
+    detail: str = ""
+    url: str = ""
+    index: int | None = None
+    options: dict[str, str] = field(default_factory=dict)
+    primary: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Night-vision filter
 # ---------------------------------------------------------------------------
@@ -372,6 +358,215 @@ class _UnknownTracker:
         )
 
 
+class _DetectionSourceRuntime:
+    def __init__(self, spec: _CameraSourceSpec, recognizer, recorder):
+        self.spec = spec
+        self.recognizer = recognizer
+        self.recorder = recorder
+        self.tracker = _UnknownTracker()
+        self.cap: CaptureHandle | None = None
+        self.frame_count = 0
+        self.last_open_attempt = 0.0
+        self.last_snapshot_read = 0.0
+        self.kinect_source = None
+        try:
+            from person_detection import MotionDetector
+
+            self.motion_detector = MotionDetector()
+        except Exception:
+            self.motion_detector = None
+
+    def close(self) -> None:
+        if self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+        self.cap = None
+
+    def step(self) -> bool:
+        frame = self._read_frame()
+        if frame is None:
+            return False
+
+        display_frame = frame
+        self.recorder.push_frame(display_frame.copy(), source_id=self.spec.id)
+        self.frame_count += 1
+        frame_skip = max(1, _live_int_setting("frame_skip", config.FRAME_SKIP))
+        if self.frame_count % frame_skip != 0:
+            return True
+
+        _process_detection_frame(
+            recognizer=self.recognizer,
+            frame=frame,
+            display_frame=display_frame,
+            tracker=self.tracker,
+            recorder=self.recorder,
+            threshold=_live_threshold(),
+            source_id=self.spec.id,
+            source_label=self.spec.label,
+            record_all_mode=False,
+            depth_raw=self._read_depth(),
+            audio_source=self.spec.url if self.spec.kind == "ip" else "",
+            motion_detector=self.motion_detector,
+        )
+        return True
+
+    def _read_frame(self) -> np.ndarray | None:
+        if self.spec.kind == "ip" and _looks_like_snapshot_url(self.spec.url):
+            now = time.monotonic()
+            if now - self.last_snapshot_read < 1.0:
+                return None
+            self.last_snapshot_read = now
+            return _read_snapshot_frame(self.spec.url, self.spec.label, self.spec.options)
+
+        if self.spec.kind == "kinect":
+            return self._read_kinect_frame()
+
+        if self.cap is None or not self.cap.isOpened():
+            if not self._open_capture():
+                return None
+
+        ok, frame = self.cap.read()
+        if ok and frame is not None:
+            return frame
+
+        logger.warning("Auxiliary camera read failed for %s; reconnecting", self.spec.label)
+        self.close()
+        return None
+
+    def _open_capture(self) -> bool:
+        now = time.monotonic()
+        if now - self.last_open_attempt < 5.0:
+            return False
+        self.last_open_attempt = now
+
+        if self.spec.kind == "ip":
+            transport = _live_setting(
+                "ip_camera_rtsp_transport",
+                config.IP_CAMERA_RTSP_TRANSPORT,
+            ).strip().lower()
+            self.cap = _open_stream_capture(
+                self.spec.url,
+                self.spec.label,
+                transport=transport,
+                http_options=self.spec.options,
+            )
+        elif self.spec.kind == "webcam" and self.spec.index is not None:
+            cap = cv2.VideoCapture(int(self.spec.index))
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self.cap = cap
+            else:
+                cap.release()
+                self.cap = None
+        else:
+            self.cap = None
+
+        if self.cap is None or not self.cap.isOpened():
+            logger.warning("Auxiliary camera unavailable: %s", self.spec.label)
+            self.close()
+            return False
+
+        logger.info("Auxiliary camera opened for detection: %s", self.spec.label)
+        return True
+
+    def _read_kinect_frame(self) -> np.ndarray | None:
+        if self.spec.index is None:
+            return None
+        try:
+            from kinect import get_kinect
+
+            if self.kinect_source is None:
+                self.kinect_source = get_kinect(self.spec.index)
+            if not self.kinect_source.available and not self.kinect_source.start():
+                return None
+            frame = self.kinect_source.read_frame()
+            if frame is None:
+                return None
+            if not _night_vision_forced_off():
+                gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                mode = self.kinect_source.get_mode()
+                if mode != "ir" and gray_mean < NIGHT_VISION_THRESHOLD:
+                    self.kinect_source.set_mode("ir")
+                elif mode == "ir" and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
+                    self.kinect_source.set_mode("rgb")
+            elif self.kinect_source.get_mode() != "rgb":
+                self.kinect_source.set_mode("rgb")
+            return frame
+        except Exception as exc:
+            logger.debug("Auxiliary Kinect read failed for %s: %s", self.spec.label, exc)
+            return None
+
+    def _read_depth(self) -> np.ndarray | None:
+        if self.spec.kind != "kinect" or self.kinect_source is None:
+            return None
+        try:
+            return self.kinect_source.read_depth()
+        except Exception:
+            return None
+
+
+class _MultiCameraDetectionWorker:
+    def __init__(self, recognizer, recorder, preferred_source: str):
+        self.recognizer = recognizer
+        self.recorder = recorder
+        self.preferred_source = preferred_source
+        self._stop_flag = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._runtimes: list[_DetectionSourceRuntime] = []
+
+    def start(self) -> None:
+        enabled = _live_bool_setting(
+            "multi_camera_detection_enabled",
+            config.MULTI_CAMERA_DETECTION_ENABLED,
+        )
+        if not enabled:
+            _camera_status["multi_camera_detection"] = False
+            _camera_status["multi_camera_sources"] = 0
+            return
+
+        specs = _live_auxiliary_source_specs(self.preferred_source)
+        self._runtimes = [
+            _DetectionSourceRuntime(spec, self.recognizer, self.recorder)
+            for spec in specs
+        ]
+        _camera_status["multi_camera_detection"] = bool(self._runtimes)
+        _camera_status["multi_camera_sources"] = len(self._runtimes)
+        if not self._runtimes:
+            return
+
+        self._stop_flag.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="MultiCameraDetection",
+        )
+        self._thread.start()
+        logger.info("Multi-camera detection started for %d source(s)", len(self._runtimes))
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_flag.set()
+        if self._thread:
+            self._thread.join(timeout=timeout)
+        for runtime in self._runtimes:
+            runtime.close()
+        self._runtimes = []
+        _camera_status["multi_camera_detection"] = False
+        _camera_status["multi_camera_sources"] = 0
+
+    def _run(self) -> None:
+        while not self._stop_flag.is_set():
+            did_work = False
+            for runtime in list(self._runtimes):
+                if self._stop_flag.is_set():
+                    break
+                did_work = runtime.step() or did_work
+            time.sleep(0.02 if did_work else 0.2)
+
+
 # ---------------------------------------------------------------------------
 # Camera thread
 # ---------------------------------------------------------------------------
@@ -380,20 +575,37 @@ class CameraLoop:
     def __init__(self):
         self._stop_flag  = threading.Event()
         self._thread: threading.Thread | None = None
+        self._lifecycle_lock = threading.RLock()
 
     def start(self) -> None:
-        self._stop_flag.clear()
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="CameraLoop"
-        )
-        self._thread.start()
-        logger.info("CameraLoop started")
+        with self._lifecycle_lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_flag.clear()
+            self._thread = threading.Thread(
+                target=self._run, daemon=True, name="CameraLoop"
+            )
+            self._thread.start()
+            logger.info("CameraLoop started")
 
     def stop(self, timeout: float = 5.0) -> None:
-        self._stop_flag.set()
-        if self._thread:
-            self._thread.join(timeout=timeout)
-        logger.info("CameraLoop stopped")
+        with self._lifecycle_lock:
+            self._stop_flag.set()
+            if self._thread:
+                self._thread.join(timeout=timeout)
+            logger.info("CameraLoop stopped")
+
+    def restart(self) -> None:
+        with self._lifecycle_lock:
+            self.stop(timeout=8.0)
+            self.start()
+
+    def restart_async(self) -> None:
+        threading.Thread(
+            target=self.restart,
+            daemon=True,
+            name="CameraLoopReload",
+        ).start()
 
     # ------------------------------------------------------------------
 
@@ -483,7 +695,14 @@ class CameraLoop:
         recorder   = get_recorder()
         recorder.start_background()
 
+        multi_detector: _MultiCameraDetectionWorker | None = None
         tracker        = _UnknownTracker()
+        try:
+            from person_detection import MotionDetector
+
+            primary_motion_detector = MotionDetector()
+        except Exception:
+            primary_motion_detector = None
         frame_count    = 0
         reconnect_wait = 2
         record_all_mode = _live_bool_setting("record_all_mode", False)
@@ -533,7 +752,13 @@ class CameraLoop:
                 logger.info("Using Kinect as camera source")
                 cap = None
 
-                if config.SLS_ENABLED and config.SLS_MODE == "always":
+                if _night_vision_forced_off():
+                    _night_vision_active = False
+                    _camera_status["night_vision"] = False
+                    _camera_status["sls_active"] = False
+                    kinect.set_mode("rgb")
+                    kinect.set_led(KinectLED.GREEN)
+                elif config.SLS_ENABLED and config.SLS_MODE == "always":
                     logger.info("SLS always mode enabled — starting Kinect in IR/depth mode")
                     _night_vision_active = True
                     _camera_status["night_vision"] = True
@@ -563,7 +788,7 @@ class CameraLoop:
 
         def switch_to_kinect_night(gray_mean: float) -> bool:
             global _night_vision_active
-            if not config.KINECT_NIGHT_VISION_ENABLED:
+            if not config.KINECT_NIGHT_VISION_ENABLED or _night_vision_forced_off():
                 return False
             logger.info("Main camera dark (brightness=%.1f) - trying Kinect IR night vision", gray_mean)
             if not start_kinect_source():
@@ -621,6 +846,9 @@ class CameraLoop:
             recorder.stop_background()
             return
 
+        multi_detector = _MultiCameraDetectionWorker(recognizer, recorder, preferred_source)
+        multi_detector.start()
+
         try:
             while not self._stop_flag.is_set():
 
@@ -649,7 +877,15 @@ class CameraLoop:
 
                 # ---- Night-vision ----
                 if use_kinect:
-                    if config.SLS_ENABLED and config.SLS_MODE == "always":
+                    if _night_vision_forced_off():
+                        if _night_vision_active or kinect.get_mode() != "rgb":
+                            _night_vision_active = False
+                            _camera_status["night_vision"] = False
+                            _camera_status["sls_active"] = False
+                            _camera_status["depth"] = False
+                            kinect.set_mode("rgb")
+                            kinect.set_led(KinectLED.GREEN)
+                    elif config.SLS_ENABLED and config.SLS_MODE == "always":
                         if not _night_vision_active or kinect.get_mode() != "ir":
                             _night_vision_active = True
                             _camera_status["night_vision"] = True
@@ -696,6 +932,7 @@ class CameraLoop:
                     # SLS skeleton overlay — uses Kinect depth data.
                     sls_active = bool(
                         config.SLS_ENABLED
+                        and not _night_vision_forced_off()
                         and (_night_vision_active or config.SLS_MODE == "always")
                     )
                     _camera_status["sls_active"] = sls_active
@@ -726,7 +963,11 @@ class CameraLoop:
                         # enabled, use the same brightness detection as the
                         # webcam path, but send the switch command to the
                         # camera instead of drawing a fake green NV filter.
-                        if ip_onvif is not None:
+                        if _night_vision_forced_off():
+                            if _night_vision_active:
+                                _night_vision_active = False
+                                _camera_status["night_vision"] = False
+                        elif ip_onvif is not None and ip_onvif.detects_darkness():
                             gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
                             if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
                                 if ip_onvif.set_night_vision(True):
@@ -745,7 +986,12 @@ class CameraLoop:
                     else:
                         # Webcam: software NV filter
                         gray_mean = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
-                        if not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
+                        if _night_vision_forced_off():
+                            if _night_vision_active:
+                                _night_vision_active = False
+                                _camera_status["night_vision"] = False
+                                _set_camera_exposure(cap, night=False)
+                        elif not _night_vision_active and gray_mean < NIGHT_VISION_THRESHOLD:
                             if switch_to_kinect_night(gray_mean):
                                 use_kinect = True
                                 cap = None
@@ -765,7 +1011,7 @@ class CameraLoop:
 
                 # Record the operator-visible image: normal frames in daylight,
                 # night-vision/SLS-enhanced frames when those modes are active.
-                recorder.push_frame(display_frame.copy())
+                recorder.push_frame(display_frame.copy(), source_id="primary")
 
                 now = time.monotonic()
                 # Keep this setting dynamic so it can be toggled at runtime.
@@ -778,7 +1024,12 @@ class CameraLoop:
 
                 if record_all_mode and (now - record_all_last_signal) >= 1.0:
                     # Continuous recording mode. None means "no specific event id".
-                    recorder.signal_unknown_visible(None)
+                    recorder.signal_unknown_visible(
+                        None,
+                        source_id="primary",
+                        source_label="Primary Detection Feed",
+                        audio_source=ip_source_url if preferred_source == "ip" else "",
+                    )
                     record_all_last_signal = now
 
                 # Run detection every FRAME_SKIP frames
@@ -786,120 +1037,21 @@ class CameraLoop:
                     _set_latest_jpeg(display_frame)
                     continue
 
-                threshold = _live_threshold()
-
-                # Detect faces — on raw frame for accuracy
-                # For Kinect IR, the IR frame works well for SCRFD detection
-                faces: list[DetectedFace] = recognizer.detect(frame)
-
-                if not faces:
-                    if tracker.active and not record_all_mode:
-                        recorder.signal_unknown_gone()
-                        tracker.reset()
-                    _set_latest_jpeg(display_frame)
-                    continue
-
-                unknown_in_frame = False
-                annotated = display_frame.copy()
-
-                # Grab Kinect depth frame for spoof check (best-effort)
-                depth_raw = None
-                if use_kinect:
-                    depth_raw = kinect.read_depth()
-
-                fh, fw = frame.shape[:2]
-                for face in faces:
-                    if face.embedding is None:
-                        continue
-
-                    # Record every detection in the heatmap
-                    from heatmap import record_detection
-                    record_detection(face.bbox, frame_w=fw, frame_h=fh)
-
-                    # --- Spoof check ---
-                    x1, y1, x2, y2 = face.bbox
-                    face_crop = frame[y1:y2, x1:x2]
-                    from spoof import is_live
-                    live, spoof_reason = is_live(face_crop, face.bbox, depth_raw)
-                    if not live:
-                        logger.info("Spoof detected (bbox=%s): %s", face.bbox, spoof_reason)
-                        _draw_face(annotated, face, "SPOOF", 0.0, color=(0, 165, 255))
-                        continue
-
-                    # --- Mask check ---
-                    masked, mask_reason = _check_mask(face_crop)
-                    if masked:
-                        logger.info("Mask detected (bbox=%s): %s", face.bbox, mask_reason)
-                        _draw_face(annotated, face, "MASKED", 0.0, color=(255, 165, 0))
-                        unknown_in_frame = True
-                        continue
-
-                    match = recognizer.match(face.embedding, threshold=threshold)
-
-                    if match:
-                        # Check access schedule — treat out-of-hours as unknown
-                        from database import raw_db_ctx
-                        import models as m
-                        with raw_db_ctx() as db:
-                            allowed = m.is_person_allowed_now(db, match.person_id)
-                        if allowed:
-                            _draw_face(annotated, face, match.person_name,
-                                       match.score, color=(0, 255, 0))
-                            _log_recognized(face, match)
-                            # Cancel any pending unknown tracker — this is a known person
-                            if tracker.active or tracker.confirming:
-                                logger.info("Known person recognised — cancelling unknown tracker")
-                                if tracker.active and not record_all_mode:
-                                    recorder.signal_unknown_gone()
-                                tracker.reset()
-                        else:
-                            unknown_in_frame = True
-                            _draw_face(annotated, face,
-                                       f"{match.person_name} (NO ACCESS)",
-                                       match.score, color=(0, 165, 255))
-                    else:
-                        unknown_in_frame = True
-                        _draw_face(annotated, face, "UNKNOWN", 0.0, color=(0, 0, 220))
-
-                if unknown_in_frame:
-                    tracker.last_seen = time.monotonic()
-                    if tracker.active:
-                        # Already confirmed and recording — keep signalling
-                        recorder.signal_unknown_visible(tracker.event_id)
-                    elif not tracker.in_cooldown():
-                        if not tracker.confirming:
-                            # First sighting — start the confirmation timer
-                            tracker.confirming    = True
-                            tracker.confirm_start = time.monotonic()
-                            logger.debug("Unknown face seen — confirming (need %.1fs)", tracker.CONFIRM_SECS)
-                        elif tracker.is_confirmed():
-                            # Held long enough — fire the alert
-                            event_id = _create_unknown_event(frame)
-                            tracker.active          = True
-                            tracker.confirming      = False
-                            tracker.event_id        = event_id
-                            tracker.last_event_time = time.monotonic()
-                            recorder.signal_unknown_visible(event_id)
-                            _alert_unknown(event_id, frame)
-                        # else: still accumulating confirm time — show "VERIFYING" label
-                        if tracker.confirming and not tracker.active:
-                            elapsed = time.monotonic() - tracker.confirm_start
-                            remaining = max(0, tracker.CONFIRM_SECS - elapsed)
-                            # Overlay a "verifying" countdown on the annotated frame
-                            cv2.putText(annotated,
-                                        f"Verifying... {remaining:.1f}s",
-                                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.7, (0, 200, 255), 2)
-                else:
-                    if tracker.active and not record_all_mode:
-                        recorder.signal_unknown_gone()
-                        tracker.reset()
-                    elif tracker.confirming:
-                        # Disappeared before confirmation — reset silently
-                        tracker.confirming    = False
-                        tracker.confirm_start = 0.0
-                        logger.debug("Unknown face gone before confirmation — ignoring")
-
+                depth_raw = kinect.read_depth() if use_kinect else None
+                annotated = _process_detection_frame(
+                    recognizer=recognizer,
+                    frame=frame,
+                    display_frame=display_frame,
+                    tracker=tracker,
+                    recorder=recorder,
+                    threshold=_live_threshold(),
+                    source_id="primary",
+                    source_label="Primary Detection Feed",
+                    record_all_mode=record_all_mode,
+                    depth_raw=depth_raw,
+                    audio_source=ip_source_url if preferred_source == "ip" else "",
+                    motion_detector=primary_motion_detector,
+                )
                 _set_latest_jpeg(annotated)
 
         finally:
@@ -911,6 +1063,8 @@ class CameraLoop:
                     pass
             elif cap is not None:
                 cap.release()
+            if multi_detector is not None:
+                multi_detector.stop()
             recorder.stop_background()
             _camera_status["running"] = False
 
@@ -988,10 +1142,120 @@ def _live_camera_preferred_source() -> str:
     return source if source in {"webcam", "ip", "kinect", "tapo"} else "webcam"
 
 
+def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSourceSpec]:
+    preferred = preferred or _live_camera_preferred_source()
+    specs: list[_CameraSourceSpec] = []
+
+    # If the primary detector is not using the configured local camera, expose
+    # it as a separate camera. Additional USB indices are always auxiliary.
+    usb_indices = _configured_usb_indices()
+    if preferred != "webcam" and config.CAMERA_INDEX not in usb_indices:
+        usb_indices.insert(0, config.CAMERA_INDEX)
+    for index in usb_indices:
+        if preferred == "webcam" and index == config.CAMERA_INDEX:
+            continue
+        source_id = "webcam" if index == config.CAMERA_INDEX else f"webcam{index}"
+        specs.append(_CameraSourceSpec(
+            id=source_id,
+            label=f"USB / Pi Camera {index}",
+            kind="webcam",
+            detail=f"index {index}",
+            index=index,
+        ))
+
+    specs.extend(_kinect_source_specs(preferred))
+
+    for idx, item in enumerate(_configured_ip_sources(), start=1):
+        url = str(item["url"])
+        specs.append(_CameraSourceSpec(
+            id=f"ip{idx}",
+            label=str(item["label"]),
+            kind="ip",
+            detail=_display_source_url(url),
+            url=url,
+            options=dict(item.get("options") or {}),
+        ))
+    return specs
+
+
+def _configured_usb_indices() -> list[int]:
+    raw = _live_setting("usb_camera_indices", config.USB_CAMERA_INDICES)
+    values: list[int] = []
+    seen: set[int] = set()
+
+    if _live_bool_setting("usb_camera_auto_discover", config.USB_CAMERA_AUTO_DISCOVER):
+        for index in _auto_discovered_usb_indices():
+            if index not in seen:
+                seen.add(index)
+                values.append(index)
+
+    for chunk in raw.replace(",", "\n").splitlines():
+        text = chunk.strip()
+        if not text or text.startswith("#"):
+            continue
+        try:
+            index = int(text)
+        except ValueError:
+            logger.warning("Ignoring invalid USB camera index: %s", text)
+            continue
+        if index < 0 or index in seen:
+            continue
+        seen.add(index)
+        values.append(index)
+    return values
+
+
+def _auto_discovered_usb_indices() -> list[int]:
+    if os.name != "posix":
+        return []
+    limit = max(0, _live_int_setting("usb_camera_scan_limit", config.USB_CAMERA_SCAN_LIMIT))
+    indices: list[int] = []
+    for path in sorted(Path("/dev").glob("video*")):
+        suffix = path.name.removeprefix("video")
+        if not suffix.isdigit():
+            continue
+        index = int(suffix)
+        if limit and index >= limit:
+            continue
+        indices.append(index)
+    return indices
+
+
+def _kinect_source_specs(preferred: str | None = None) -> list[_CameraSourceSpec]:
+    if not config.KINECT_ENABLED:
+        return []
+    try:
+        from kinect import kinect_count
+
+        count = kinect_count()
+    except Exception:
+        count = 0
+    preferred = preferred or _live_camera_preferred_source()
+    specs: list[_CameraSourceSpec] = []
+    for index in range(count):
+        if preferred == "kinect" and index == 0:
+            continue
+        source_id = "kinect" if index == 0 else f"kinect{index + 1}"
+        label = "Kinect v1" if index == 0 else f"Kinect v1 #{index + 1}"
+        specs.append(_CameraSourceSpec(
+            id=source_id,
+            label=label,
+            kind="kinect",
+            detail="RGB/IR (hardware)",
+            index=index,
+        ))
+    return specs
+
+
+def _night_vision_forced_off() -> bool:
+    mode = _live_setting("night_vision_mode", config.NIGHT_VISION_MODE)
+    return mode.strip().lower() == "force_off"
+
+
 def _build_ip_onvif_controller(stream_url: str) -> OnvifNightVisionController | None:
     mode = _live_setting("ip_camera_onvif_night_mode", config.IP_CAMERA_ONVIF_NIGHT_MODE)
     mode = mode.strip().lower()
-    if mode not in {"disabled", "detect"}:
+    if mode not in {"disabled", "detect", "force_off"}:
         mode = "disabled"
     if mode == "disabled":
         return None
@@ -1359,8 +1623,175 @@ def _draw_face(
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
 
+def _process_detection_frame(
+    recognizer,
+    frame: np.ndarray,
+    display_frame: np.ndarray,
+    tracker: _UnknownTracker,
+    recorder,
+    threshold: float,
+    source_id: str = "primary",
+    source_label: str = "Primary Detection Feed",
+    record_all_mode: bool = False,
+    depth_raw: np.ndarray | None = None,
+    audio_source: str = "",
+    motion_detector=None,
+) -> np.ndarray:
+    faces: list[DetectedFace] = recognizer.detect(frame)
 
-def _log_recognized(face: DetectedFace, match) -> None:
+    object_detections = []
+    object_mode = _live_setting("object_detection_mode", config.OBJECT_DETECTION_MODE).strip().lower()
+    if object_mode not in {"person", "people_pets", "all"}:
+        object_mode = "people_pets"
+    if not faces or object_mode in {"people_pets", "all"}:
+        try:
+            from person_detection import get_object_detector
+
+            object_detector = get_object_detector()
+            if object_detector.is_enabled():
+                object_detections = object_detector.detect(frame)
+        except Exception as exc:
+            logger.debug("Object detector unavailable for %s: %s", source_label, exc)
+
+    if _live_bool_setting("moving_object_detection_enabled", config.MOVING_OBJECT_DETECTION_ENABLED):
+        try:
+            if motion_detector is not None:
+                object_detections.extend(motion_detector.detect(
+                    frame,
+                    min_area=_live_int_setting(
+                        "moving_object_min_area",
+                        config.MOVING_OBJECT_MIN_AREA,
+                    ),
+                    threshold=_live_int_setting(
+                        "moving_object_threshold",
+                        config.MOVING_OBJECT_THRESHOLD,
+                    ),
+                ))
+        except Exception as exc:
+            logger.debug("Motion detector unavailable for %s: %s", source_label, exc)
+
+    if not faces and not object_detections:
+        if tracker.active and not record_all_mode:
+            recorder.signal_unknown_gone(source_id)
+            tracker.reset()
+        return display_frame
+
+    unknown_in_frame = False
+    known_allowed_in_frame = False
+    annotated = display_frame.copy()
+
+    fh, fw = frame.shape[:2]
+
+    for face in faces:
+        if face.embedding is None:
+            continue
+
+        from heatmap import record_detection
+        record_detection(face.bbox, frame_w=fw, frame_h=fh)
+
+        x1, y1, x2, y2 = face.bbox
+        face_crop = frame[y1:y2, x1:x2]
+        from spoof import is_live
+        live, spoof_reason = is_live(face_crop, face.bbox, depth_raw)
+        if not live:
+            logger.info("Spoof detected on %s (bbox=%s): %s", source_label, face.bbox, spoof_reason)
+            _draw_face(annotated, face, "SPOOF", 0.0, color=(0, 165, 255))
+            continue
+
+        masked, mask_reason = _check_mask(face_crop)
+        if masked:
+            logger.info("Mask detected on %s (bbox=%s): %s", source_label, face.bbox, mask_reason)
+            _draw_face(annotated, face, "MASKED", 0.0, color=(255, 165, 0))
+            unknown_in_frame = True
+            continue
+
+        match = recognizer.match(face.embedding, threshold=threshold)
+
+        if match:
+            from database import raw_db_ctx
+            import models as m
+            with raw_db_ctx() as db:
+                allowed = m.is_person_allowed_now(db, match.person_id)
+            if allowed:
+                known_allowed_in_frame = True
+                _draw_face(annotated, face, match.person_name,
+                           match.score, color=(0, 255, 0))
+                _log_recognized(face, match, source_label)
+                if tracker.active or tracker.confirming:
+                    logger.info("Known person recognised on %s - cancelling unknown tracker", source_label)
+                    if tracker.active and not record_all_mode:
+                        recorder.signal_unknown_gone(source_id)
+                    tracker.reset()
+            else:
+                unknown_in_frame = True
+                _draw_face(annotated, face,
+                           f"{match.person_name} (NO ACCESS)",
+                           match.score, color=(0, 165, 255))
+        else:
+            unknown_in_frame = True
+            _draw_face(annotated, face, "UNKNOWN", 0.0, color=(0, 0, 220))
+
+    if object_detections:
+        from heatmap import record_detection
+        from person_detection import draw_object_detection
+
+        for detection in object_detections:
+            record_detection(detection.bbox, frame_w=fw, frame_h=fh)
+            draw_object_detection(annotated, detection)
+        if not known_allowed_in_frame:
+            unknown_in_frame = True
+
+    if unknown_in_frame:
+        tracker.last_seen = time.monotonic()
+        if tracker.active:
+            recorder.signal_unknown_visible(
+                tracker.event_id,
+                source_id=source_id,
+                source_label=source_label,
+                audio_source=audio_source,
+            )
+        elif not tracker.in_cooldown():
+            if not tracker.confirming:
+                tracker.confirming    = True
+                tracker.confirm_start = time.monotonic()
+                logger.debug(
+                    "Unknown seen on %s - confirming (need %.1fs)",
+                    source_label,
+                    tracker.CONFIRM_SECS,
+                )
+            elif tracker.is_confirmed():
+                event_id = _create_unknown_event(frame, source_label=source_label)
+                tracker.active          = True
+                tracker.confirming      = False
+                tracker.event_id        = event_id
+                tracker.last_event_time = time.monotonic()
+                recorder.signal_unknown_visible(
+                    event_id,
+                    source_id=source_id,
+                    source_label=source_label,
+                    audio_source=audio_source,
+                )
+                _alert_unknown(event_id, frame)
+            if tracker.confirming and not tracker.active:
+                elapsed = time.monotonic() - tracker.confirm_start
+                remaining = max(0, tracker.CONFIRM_SECS - elapsed)
+                cv2.putText(annotated,
+                            f"Verifying... {remaining:.1f}s",
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7, (0, 200, 255), 2)
+    else:
+        if tracker.active and not record_all_mode:
+            recorder.signal_unknown_gone(source_id)
+            tracker.reset()
+        elif tracker.confirming:
+            tracker.confirming    = False
+            tracker.confirm_start = 0.0
+            logger.debug("Unknown gone from %s before confirmation - ignoring", source_label)
+
+    return annotated
+
+
+def _log_recognized(face: DetectedFace, match, source_label: str = "") -> None:
     """Log a recognized-person event (throttled to avoid DB spam)."""
     # Simple in-memory throttle: one DB write per person per 30s
     now = time.monotonic()
@@ -1380,6 +1811,7 @@ def _log_recognized(face: DetectedFace, match) -> None:
                 person_id=match.person_id,
                 person_name=match.person_name,
                 confidence=round(match.score, 4),
+                notes=f"Camera: {source_label}" if source_label else "",
             )
     except Exception as exc:
         logger.warning("Failed to log recognized event: %s", exc)
@@ -1397,7 +1829,7 @@ def _save_snapshot(frame: np.ndarray) -> str:
     return fname  # only the filename — route reconstructs the full path
 
 
-def _create_unknown_event(frame: np.ndarray) -> int:
+def _create_unknown_event(frame: np.ndarray, source_label: str = "") -> int:
     """Write an unknown event to the DB and return the new event_id."""
     snapshot_path = ""
     try:
@@ -1414,6 +1846,7 @@ def _create_unknown_event(frame: np.ndarray) -> int:
                 event_type="unknown",
                 snapshot_path=snapshot_path,
                 occurred_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                notes=f"Camera: {source_label}" if source_label else "",
             )
         return event_id
     except Exception as exc:
@@ -1475,12 +1908,14 @@ def generate_mjpeg(source_id: str = "primary"):
             time.sleep(0.05)  # ~20 FPS max to browser
         return
 
-    if source_id == "webcam":
-        yield from _generate_capture_mjpeg(config.CAMERA_INDEX, label="USB webcam")
+    webcam_index = _parse_webcam_source_id(source_id)
+    if webcam_index is not None:
+        yield from _generate_capture_mjpeg(webcam_index, label=f"USB webcam {webcam_index}")
         return
 
-    if source_id == "kinect":
-        yield from _generate_kinect_mjpeg()
+    kinect_index = _parse_kinect_source_id(source_id)
+    if kinect_index is not None:
+        yield from _generate_kinect_mjpeg(kinect_index)
         return
 
     if source_id == "tapo":
@@ -1517,7 +1952,36 @@ def generate_mjpeg(source_id: str = "primary"):
     yield from _generate_error_mjpeg()
 
 
-def _generate_kinect_mjpeg():
+def _parse_webcam_source_id(source_id: str) -> int | None:
+    if source_id == "webcam":
+        return config.CAMERA_INDEX
+    if not source_id.startswith("webcam"):
+        return None
+    suffix = source_id[6:]
+    if not suffix:
+        return config.CAMERA_INDEX
+    try:
+        return int(suffix)
+    except ValueError:
+        return None
+
+
+def _parse_kinect_source_id(source_id: str) -> int | None:
+    if source_id == "kinect":
+        return 0
+    if not source_id.startswith("kinect"):
+        return None
+    suffix = source_id[6:]
+    if not suffix:
+        return 0
+    try:
+        index = int(suffix) - 1
+    except ValueError:
+        return None
+    return index if index >= 0 else None
+
+
+def _generate_kinect_mjpeg(index: int = 0):
     try:
         from kinect import get_kinect, kinect_available
     except Exception:
@@ -1525,12 +1989,12 @@ def _generate_kinect_mjpeg():
         yield from _generate_error_mjpeg()
         return
 
-    if not kinect_available():
-        logger.warning("Kinect live feed requested but Kinect is not available")
+    if not kinect_available(index):
+        logger.warning("Kinect live feed requested but Kinect #%d is not available", index + 1)
         yield from _generate_error_mjpeg()
         return
 
-    kinect = get_kinect()
+    kinect = get_kinect(index)
     if not kinect.available and not kinect.start():
         logger.warning("Kinect live feed could not start: %s", kinect.error)
         yield from _generate_error_mjpeg()
@@ -1602,17 +2066,7 @@ def _generate_snapshot_mjpeg(
 ):
     while True:
         try:
-            options = _http_camera_options(url, http_options)
-            headers = {"User-Agent": options.get("user_agent", "CacheSec/1.0")}
-            if options.get("referer"):
-                headers["Referer"] = options["referer"]
-            if options.get("origin"):
-                headers["Origin"] = options["origin"]
-            req = Request(url, headers=headers)
-            with urlopen(req, timeout=5) as resp:
-                data = resp.read()
-            arr = np.frombuffer(data, dtype=np.uint8)
-            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            frame = _read_snapshot_frame(url, label, http_options)
             if frame is None:
                 raise ValueError("snapshot did not decode as an image")
             ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -1622,6 +2076,28 @@ def _generate_snapshot_mjpeg(
             logger.debug("Snapshot live feed failed for %s: %s", label, exc)
             yield from _generate_error_mjpeg(single=True)
         time.sleep(1.0)
+
+
+def _read_snapshot_frame(
+    url: str,
+    label: str,
+    http_options: dict[str, str] | None = None,
+) -> np.ndarray | None:
+    try:
+        options = _http_camera_options(url, http_options)
+        headers = {"User-Agent": options.get("user_agent", "CacheSec/1.0")}
+        if options.get("referer"):
+            headers["Referer"] = options["referer"]
+        if options.get("origin"):
+            headers["Origin"] = options["origin"]
+        req = Request(url, headers=headers)
+        with urlopen(req, timeout=5) as resp:
+            data = resp.read()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception as exc:
+        logger.debug("Snapshot fetch failed for %s: %s", label, exc)
+        return None
 
 
 def _generate_error_mjpeg(single: bool = False):

@@ -55,22 +55,49 @@ CAMERA_INDEX: int = _int("CAMERA_INDEX", 0)
 FRAME_WIDTH: int = _int("FRAME_WIDTH", 640)
 FRAME_HEIGHT: int = _int("FRAME_HEIGHT", 480)
 UNKNOWN_COOLDOWN_SECONDS: int = _int("UNKNOWN_COOLDOWN_SECONDS", 10)
+NIGHT_VISION_MODE: str = os.getenv("NIGHT_VISION_MODE", "auto").strip().lower()
+if NIGHT_VISION_MODE not in {"auto", "force_off"}:
+    NIGHT_VISION_MODE = "auto"
 CAMERA_PREFERRED_SOURCE: str = os.getenv("CAMERA_PREFERRED_SOURCE", "webcam").strip().lower()
 if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect", "ip", "tapo"}:
     CAMERA_PREFERRED_SOURCE = "webcam"
+USB_CAMERA_INDICES: str = os.getenv("USB_CAMERA_INDICES", "").strip()
+USB_CAMERA_AUTO_DISCOVER: bool = _bool("USB_CAMERA_AUTO_DISCOVER", True)
+USB_CAMERA_SCAN_LIMIT: int = _int("USB_CAMERA_SCAN_LIMIT", 8)
+MULTI_CAMERA_DETECTION_ENABLED: bool = _bool("MULTI_CAMERA_DETECTION_ENABLED", True)
 IP_CAMERA_URL: str = os.getenv("IP_CAMERA_URL", "").strip()
 IP_CAMERA_URLS: str = os.getenv("IP_CAMERA_URLS", "").strip()
 IP_CAMERA_RTSP_TRANSPORT: str = os.getenv("IP_CAMERA_RTSP_TRANSPORT", "tcp").strip().lower()
 if IP_CAMERA_RTSP_TRANSPORT not in {"tcp", "udp", "udp_multicast", "http"}:
     IP_CAMERA_RTSP_TRANSPORT = "tcp"
 IP_CAMERA_ONVIF_NIGHT_MODE: str = os.getenv("IP_CAMERA_ONVIF_NIGHT_MODE", "disabled").strip().lower()
-if IP_CAMERA_ONVIF_NIGHT_MODE not in {"disabled", "detect"}:
+if IP_CAMERA_ONVIF_NIGHT_MODE not in {"disabled", "detect", "force_off"}:
     IP_CAMERA_ONVIF_NIGHT_MODE = "disabled"
 IP_CAMERA_ONVIF_HOST: str = os.getenv("IP_CAMERA_ONVIF_HOST", "").strip()
 IP_CAMERA_ONVIF_PORT: int = _int("IP_CAMERA_ONVIF_PORT", 0)
 IP_CAMERA_ONVIF_USERNAME: str = os.getenv("IP_CAMERA_ONVIF_USERNAME", "").strip()
 IP_CAMERA_ONVIF_PASSWORD: str = os.getenv("IP_CAMERA_ONVIF_PASSWORD", "")
 IP_CAMERA_ONVIF_WSDL_DIR: str = os.getenv("IP_CAMERA_ONVIF_WSDL_DIR", "").strip()
+PERSON_DETECTION_BACKEND: str = os.getenv("PERSON_DETECTION_BACKEND", "disabled").strip().lower()
+if PERSON_DETECTION_BACKEND not in {"disabled", "detectron2"}:
+    PERSON_DETECTION_BACKEND = "disabled"
+PERSON_DETECTION_THRESHOLD: float = _float("PERSON_DETECTION_THRESHOLD", 0.75)
+PERSON_DETECTION_DEVICE: str = os.getenv("PERSON_DETECTION_DEVICE", "auto").strip().lower()
+if PERSON_DETECTION_DEVICE not in {"auto", "cpu", "cuda"}:
+    PERSON_DETECTION_DEVICE = "auto"
+OBJECT_DETECTION_BACKEND: str = os.getenv("OBJECT_DETECTION_BACKEND", PERSON_DETECTION_BACKEND).strip().lower()
+if OBJECT_DETECTION_BACKEND not in {"disabled", "detectron2"}:
+    OBJECT_DETECTION_BACKEND = "disabled"
+OBJECT_DETECTION_MODE: str = os.getenv("OBJECT_DETECTION_MODE", "people_pets").strip().lower()
+if OBJECT_DETECTION_MODE not in {"person", "people_pets", "all"}:
+    OBJECT_DETECTION_MODE = "people_pets"
+OBJECT_DETECTION_THRESHOLD: float = _float("OBJECT_DETECTION_THRESHOLD", PERSON_DETECTION_THRESHOLD)
+OBJECT_DETECTION_DEVICE: str = os.getenv("OBJECT_DETECTION_DEVICE", PERSON_DETECTION_DEVICE).strip().lower()
+if OBJECT_DETECTION_DEVICE not in {"auto", "cpu", "cuda"}:
+    OBJECT_DETECTION_DEVICE = "auto"
+MOVING_OBJECT_DETECTION_ENABLED: bool = _bool("MOVING_OBJECT_DETECTION_ENABLED", False)
+MOVING_OBJECT_MIN_AREA: int = _int("MOVING_OBJECT_MIN_AREA", 2500)
+MOVING_OBJECT_THRESHOLD: int = _int("MOVING_OBJECT_THRESHOLD", 25)
 
 # ---------------------------------------------------------------------------
 # TP-Link Tapo cameras (pytapo)
@@ -97,6 +124,11 @@ MAX_RECORDING_SECONDS: int = _int("MAX_RECORDING_SECONDS", 5400)  # 1h30m
 SAVE_RECORDINGS_LOCALLY: bool = _bool("SAVE_RECORDINGS_LOCALLY", True)
 RECORD_AUDIO_ENABLED: bool = _bool("RECORD_AUDIO_ENABLED", False)
 RECORD_AUDIO_DEVICE: str = os.getenv("RECORD_AUDIO_DEVICE", "auto").strip() or "auto"
+VIDEO_ENCODER: str = os.getenv("VIDEO_ENCODER", "auto").strip().lower()
+if VIDEO_ENCODER not in {"auto", "libx264", "h264_nvenc", "hevc_nvenc", "h264_qsv"}:
+    VIDEO_ENCODER = "auto"
+VIDEO_ENCODER_PRESET: str = os.getenv("VIDEO_ENCODER_PRESET", "fast").strip() or "fast"
+VIDEO_ENCODER_QUALITY: int = _int("VIDEO_ENCODER_QUALITY", 26)
 
 # ---------------------------------------------------------------------------
 # Discord
