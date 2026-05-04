@@ -1,15 +1,17 @@
 """
 setup_wizard.py — First-run setup wizard.
 
-Triggers when the database has no users and the `setup_complete` flag is not
-set. Walks the operator through:
+State machine:
+    admin       → no users in DB
+    camera      → no primary camera selected yet
+    extras      → primary set, asking if user wants live-only cameras
+    discord     → optional Discord webhook
+    done        → flag setup_complete=true and bounce to dashboard
 
-  1. Admin account creation (replaces the legacy auto-`admin/changeme123`).
-  2. Primary detection camera (USB / Pi, IP/RTSP, Tapo, Kinect, or skip).
-  3. Discord webhook (optional).
-
-When complete, sets `setup_complete=true` in the settings table; the
-`before_request` gate in app.py then stops redirecting to /setup.
+Validation: each step writes to the DB only after type-specific fields pass
+validation, so a half-finished form never leaves the DB in a broken state.
+A self-heal in /setup/ flips setup_complete=true if every step's data is
+present but the flag never landed.
 """
 
 from __future__ import annotations
@@ -35,11 +37,10 @@ setup_bp = Blueprint("setup", __name__, url_prefix="/setup")
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# State
 # ---------------------------------------------------------------------------
 
 def setup_complete() -> bool:
-    """True once the wizard has finished. Cached on first hit."""
     try:
         return get_setting("setup_complete", "").strip().lower() == "true"
     except Exception:
@@ -54,15 +55,39 @@ def _has_users() -> bool:
         return False
 
 
+def _has_primary_camera() -> bool:
+    return bool(get_setting("camera_preferred_source", ""))
+
+
+def _extras_decided() -> bool:
+    """User has either added an extra camera or explicitly said 'no extras'."""
+    return get_setting("setup_extras_done", "").strip().lower() == "true"
+
+
+def _discord_decided() -> bool:
+    if get_setting("setup_skip_discord", "").strip().lower() == "true":
+        return True
+    return bool(get_setting("discord_webhook_url", ""))
+
+
 def _wizard_state() -> str:
-    """Which step are we on?"""
     if not _has_users():
         return "admin"
-    if not get_setting("camera_preferred_source", ""):
+    if not _has_primary_camera():
         return "camera"
-    if get_setting("setup_skip_discord", "") != "true" and not get_setting("discord_webhook_url", ""):
+    if not _extras_decided():
+        return "extras"
+    if not _discord_decided():
         return "discord"
     return "done"
+
+
+def _start_camera_loop() -> None:
+    try:
+        from camera import get_camera_loop
+        get_camera_loop().start()
+    except Exception as exc:
+        logger.warning("Camera loop start failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -73,20 +98,25 @@ def _wizard_state() -> str:
 def wizard():
     if setup_complete():
         return redirect(url_for("admin.dashboard"))
-    state = _wizard_state()
-    # Self-heal: if every step's data is present but the completion flag
-    # somehow never landed, set it now and let the user through. Avoids the
-    # "Setup complete — redirecting…" deadlock.
-    if state == "done":
-        set_setting("setup_complete", "true", user_id=session.get("user_id"))
-        try:
-            from camera import get_camera_loop
-            get_camera_loop().start()
-        except Exception as exc:
-            logger.warning("Camera loop start after setup recovery failed: %s", exc)
-        return redirect(url_for("admin.dashboard"))
-    return render_template("setup/wizard.html", step=state)
 
+    state = _wizard_state()
+    if state == "done":
+        # Self-heal: every step satisfied, flip the flag.
+        set_setting("setup_complete", "true", user_id=session.get("user_id"))
+        _start_camera_loop()
+        return redirect(url_for("admin.dashboard"))
+
+    extras = _list_extra_cameras() if state in {"extras", "discord"} else []
+    return render_template(
+        "setup/wizard.html",
+        step=state,
+        primary_kind=get_setting("camera_preferred_source", ""),
+        primary_label=_describe_primary(),
+        extras=extras,
+    )
+
+
+# --------- ADMIN ----------
 
 @setup_bp.route("/admin", methods=["POST"])
 def submit_admin():
@@ -120,9 +150,6 @@ def submit_admin():
         role_id=role["id"],
         display_name=username,
     )
-    logger.info("Setup wizard: admin user '%s' created (uid=%d)", username, uid)
-
-    # Sign the user in so the rest of the wizard runs under their session.
     user_row = models.get_user_by_id(db, uid)
     if user_row:
         login_user(user_row)
@@ -133,64 +160,81 @@ def submit_admin():
     return redirect(url_for("setup.wizard"))
 
 
+# --------- PRIMARY CAMERA ----------
+
 @setup_bp.route("/camera", methods=["POST"])
 def submit_camera():
     if not _has_users():
         return redirect(url_for("setup.wizard"))
 
-    skip = (request.form.get("skip") or "").strip().lower() == "true"
-    if skip:
-        # Pick a sensible default so the wizard advances. Users can change
-        # this later in Settings.
-        set_setting("camera_preferred_source", "webcam",
-                    user_id=session.get("user_id"))
-        flash("Skipped camera setup. Configure it later in Settings.", "info")
+    cam_type = (request.form.get("cam_type") or "").strip().lower()
+    if cam_type not in {"webcam", "ip", "kinect", "tapo"}:
+        flash("Pick a camera type to continue.", "danger")
         return redirect(url_for("setup.wizard"))
 
-    cam_type = (request.form.get("cam_type") or "webcam").strip().lower()
-    if cam_type not in {"webcam", "ip", "kinect", "tapo"}:
-        cam_type = "webcam"
-
     uid = session.get("user_id")
+    pending: list[tuple[str, str]] = _validate_camera_fields(cam_type, request.form)
+    if pending is None:
+        return redirect(url_for("setup.wizard"))
 
-    # Validate type-specific fields BEFORE persisting anything, so a missing
-    # Tapo password doesn't leave the DB in a half-configured state.
-    pending: list[tuple[str, str]] = []
-    if cam_type == "ip":
-        url = (request.form.get("ip_camera_url") or "").strip()
-        if not url:
-            flash("IP camera URL is required.", "danger")
-            return redirect(url_for("setup.wizard"))
-        transport = (request.form.get("ip_camera_rtsp_transport") or "tcp").strip().lower()
-        if transport not in {"tcp", "udp", "udp_multicast", "http"}:
-            transport = "tcp"
-        pending.append(("ip_camera_url", url))
-        pending.append(("ip_camera_rtsp_transport", transport))
-    elif cam_type == "tapo":
-        host = (request.form.get("tapo_host") or "").strip()
-        username = (request.form.get("tapo_username") or "admin").strip() or "admin"
-        password = request.form.get("tapo_password") or ""
-        stream = (request.form.get("tapo_stream") or "stream1").strip().lower()
-        if stream not in {"stream1", "stream2"}:
-            stream = "stream1"
-        if not host or not password:
-            flash("Tapo host and password are required.", "danger")
-            return redirect(url_for("setup.wizard"))
-        pending.append(("tapo_host", host))
-        pending.append(("tapo_username", username))
-        pending.append(("tapo_password", password))
-        pending.append(("tapo_stream", stream))
-
-    # All validation passed — write source + type-specific keys.
     set_setting("camera_preferred_source", cam_type, user_id=uid)
-    for key, value in pending:
-        set_setting(key, value, user_id=uid)
+    for k, v in pending:
+        set_setting(k, v, user_id=uid)
 
     audit("SETUP_CAMERA_CONFIGURED", user_id=uid,
           username=session.get("username", ""),
           detail=f"type={cam_type}", ip_address=get_client_ip())
     return redirect(url_for("setup.wizard"))
 
+
+# --------- EXTRA (live-only) CAMERAS ----------
+
+@setup_bp.route("/extras/add", methods=["POST"])
+def add_extra_camera():
+    if not _has_primary_camera():
+        return redirect(url_for("setup.wizard"))
+
+    label = (request.form.get("label") or "").strip()
+    url = (request.form.get("url") or "").strip()
+    if not url:
+        flash("Stream URL is required for an extra camera.", "danger")
+        return redirect(url_for("setup.wizard"))
+
+    if not (url.startswith("rtsp://") or url.startswith("http://") or url.startswith("https://")):
+        flash("Stream URL must start with rtsp://, http://, or https://", "danger")
+        return redirect(url_for("setup.wizard"))
+
+    extras = _list_extra_cameras_raw()
+    line = f"{label}|{url}" if label else url
+    extras.append(line)
+    set_setting("ip_camera_urls", "\n".join(extras), user_id=session.get("user_id"))
+    flash(f"Added camera: {label or url}", "success")
+    return redirect(url_for("setup.wizard"))
+
+
+@setup_bp.route("/extras/remove", methods=["POST"])
+def remove_extra_camera():
+    try:
+        idx = int(request.form.get("idx", "-1"))
+    except (TypeError, ValueError):
+        idx = -1
+    extras = _list_extra_cameras_raw()
+    if 0 <= idx < len(extras):
+        removed = extras.pop(idx)
+        set_setting("ip_camera_urls", "\n".join(extras), user_id=session.get("user_id"))
+        flash(f"Removed: {removed}", "info")
+    return redirect(url_for("setup.wizard"))
+
+
+@setup_bp.route("/extras/done", methods=["POST"])
+def extras_done():
+    if not _has_primary_camera():
+        return redirect(url_for("setup.wizard"))
+    set_setting("setup_extras_done", "true", user_id=session.get("user_id"))
+    return redirect(url_for("setup.wizard"))
+
+
+# --------- DISCORD ----------
 
 @setup_bp.route("/discord", methods=["POST"])
 def submit_discord():
@@ -206,33 +250,30 @@ def submit_discord():
         if webhook and not webhook.startswith("https://discord.com/api/webhooks/"):
             flash("That doesn't look like a Discord webhook URL.", "danger")
             return redirect(url_for("setup.wizard"))
-        if webhook:
-            set_setting("discord_webhook_url", webhook, user_id=uid)
+        if not webhook:
+            flash("Webhook URL is required (or click Skip).", "danger")
+            return redirect(url_for("setup.wizard"))
+        set_setting("discord_webhook_url", webhook, user_id=uid)
 
     set_setting("setup_complete", "true", user_id=uid)
     audit("SETUP_COMPLETE", user_id=uid,
           username=session.get("username", ""),
           ip_address=get_client_ip())
     flash("Setup complete. Welcome to CacheSec.", "success")
-
-    # Kick the camera loop now that settings exist.
-    try:
-        from camera import get_camera_loop
-        get_camera_loop().start()
-    except Exception as exc:
-        logger.warning("Camera loop start after setup failed: %s", exc)
-
+    _start_camera_loop()
     return redirect(url_for("admin.dashboard"))
 
 
+# ---------------------------------------------------------------------------
+# Camera test endpoint (used by the wizard's auto-probe)
+# ---------------------------------------------------------------------------
+
 @setup_bp.route("/test-camera", methods=["POST"])
 def test_camera():
-    """Probe the camera config without saving — returns ok/error JSON."""
     if not _has_users():
         return jsonify(ok=False, error="Create the admin account first."), 403
 
-    cam_type = (request.form.get("cam_type") or "webcam").strip().lower()
-
+    cam_type = (request.form.get("cam_type") or "").strip().lower()
     try:
         if cam_type == "webcam":
             return _probe_webcam()
@@ -251,17 +292,96 @@ def test_camera():
             return _probe_url(url)
         if cam_type == "kinect":
             return _probe_kinect()
-        return jsonify(ok=False, error=f"Unknown camera type: {cam_type}")
+        if cam_type == "extra":
+            return _probe_url((request.form.get("url") or "").strip())
+        return jsonify(ok=False, error="Unknown camera type.")
     except Exception as exc:
         logger.exception("Camera probe failed")
         return jsonify(ok=False, error=str(exc))
 
 
 # ---------------------------------------------------------------------------
-# Probes
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _probe_webcam() -> "tuple":
+def _validate_camera_fields(cam_type: str, form) -> "list[tuple[str,str]] | None":
+    """Return list of (key, value) settings to persist, or None on validation
+    failure (after flashing an error)."""
+    pending: list[tuple[str, str]] = []
+    if cam_type == "ip":
+        url = (form.get("ip_camera_url") or "").strip()
+        if not url:
+            flash("Stream URL is required.", "danger")
+            return None
+        if not (url.startswith("rtsp://") or url.startswith("http://") or url.startswith("https://")):
+            flash("URL must start with rtsp://, http://, or https://", "danger")
+            return None
+        transport = (form.get("ip_camera_rtsp_transport") or "tcp").strip().lower()
+        if transport not in {"tcp", "udp", "udp_multicast", "http"}:
+            transport = "tcp"
+        pending.append(("ip_camera_url", url))
+        pending.append(("ip_camera_rtsp_transport", transport))
+    elif cam_type == "tapo":
+        host = (form.get("tapo_host") or "").strip()
+        username = (form.get("tapo_username") or "admin").strip() or "admin"
+        password = form.get("tapo_password") or ""
+        stream = (form.get("tapo_stream") or "stream1").strip().lower()
+        if stream not in {"stream1", "stream2"}:
+            stream = "stream1"
+        if not host:
+            flash("Tapo host (IP) is required.", "danger")
+            return None
+        if not password:
+            flash("Tapo password is required.", "danger")
+            return None
+        pending.append(("tapo_host", host))
+        pending.append(("tapo_username", username))
+        pending.append(("tapo_password", password))
+        pending.append(("tapo_stream", stream))
+    return pending
+
+
+def _list_extra_cameras_raw() -> list[str]:
+    raw = get_setting("ip_camera_urls", "")
+    return [line.strip() for line in raw.replace(",", "\n").splitlines() if line.strip()]
+
+
+def _list_extra_cameras() -> list[dict]:
+    out = []
+    for idx, line in enumerate(_list_extra_cameras_raw()):
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if not parts:
+            continue
+        if len(parts) == 1:
+            out.append({"idx": idx, "label": "", "url": parts[0]})
+        else:
+            label = parts[0]
+            url = parts[1]
+            # If first part looks like a URL, swap.
+            if "://" in label and "://" not in url:
+                label, url = "", parts[0]
+            out.append({"idx": idx, "label": label, "url": url})
+    return out
+
+
+def _describe_primary() -> str:
+    src = get_setting("camera_preferred_source", "")
+    if src == "tapo":
+        host = get_setting("tapo_host", "")
+        return f"Tapo · {host}" if host else "Tapo"
+    if src == "ip":
+        url = get_setting("ip_camera_url", "")
+        return f"IP / RTSP · {url[:48]}" if url else "IP / RTSP"
+    if src == "kinect":
+        return "Kinect v1"
+    if src == "webcam":
+        return "USB / Pi camera"
+    return src or ""
+
+
+# ---- probes ----
+
+def _probe_webcam():
     import cv2
     idx = config.CAMERA_INDEX
     cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
@@ -270,22 +390,19 @@ def _probe_webcam() -> "tuple":
         cap = cv2.VideoCapture(idx)
     try:
         if not cap.isOpened():
-            return jsonify(ok=False, error=f"Cannot open /dev/video{idx}")
+            return jsonify(ok=False, error=f"Cannot open /dev/video{idx}.")
         ok, _ = cap.read()
         if not ok:
             return jsonify(ok=False, error="Camera opened but returned no frames.")
-        return jsonify(ok=True, message=f"Captured a frame from /dev/video{idx}.")
+        return jsonify(ok=True, message=f"Frame received from /dev/video{idx}.")
     finally:
         cap.release()
 
 
-def _probe_url(url: str) -> "tuple":
-    import cv2
+def _probe_url(url: str):
+    import cv2, os
     if not url:
         return jsonify(ok=False, error="URL is empty.")
-    # Force ffmpeg backend with a short timeout — RTSP discovery can hang
-    # for the full default timeout otherwise.
-    import os
     prev = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS")
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
         "rtsp_transport;tcp|stimeout;5000000|max_delay;500000"
@@ -298,7 +415,7 @@ def _probe_url(url: str) -> "tuple":
             ok, _ = cap.read()
             if ok:
                 return jsonify(ok=True, message="Stream opened and produced frames.")
-        return jsonify(ok=False, error="Stream opened but no frames received in time.")
+        return jsonify(ok=False, error="Stream opened but produced no frames in time.")
     finally:
         cap.release()
         if prev is None:
@@ -307,7 +424,7 @@ def _probe_url(url: str) -> "tuple":
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = prev
 
 
-def _probe_kinect() -> "tuple":
+def _probe_kinect():
     try:
         from kinect import kinect_available
     except Exception as exc:
