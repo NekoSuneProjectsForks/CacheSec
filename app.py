@@ -28,6 +28,7 @@ import config
 from database import init_db, close_db, get_db
 from auth import auth_bp, current_user
 from admin import admin_bp
+from setup_wizard import setup_bp, setup_complete
 
 # ---------------------------------------------------------------------------
 # Logging setup (before app creation so it catches import errors too)
@@ -143,6 +144,20 @@ def create_app() -> Flask:
     # -----------------------------------------------------------------------
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp, url_prefix="/admin")
+    app.register_blueprint(setup_bp)
+
+    # First-run setup gate: until setup_complete=true in the settings table,
+    # all routes redirect to /setup. Static assets and the wizard itself stay
+    # reachable so the page can render and submit forms.
+    @app.before_request
+    def _setup_gate():
+        from flask import request, redirect, url_for
+        path = request.path or ""
+        if path.startswith("/setup") or path.startswith("/static"):
+            return None
+        if setup_complete():
+            return None
+        return redirect(url_for("setup.wizard"))
 
     # Root redirect
     @app.route("/")
@@ -178,37 +193,12 @@ def create_app() -> Flask:
 # ---------------------------------------------------------------------------
 
 def _bootstrap() -> None:
-    """Run once at startup: init DB, create default admin, start camera."""
+    """Run once at startup: init DB and (if setup is done) start camera."""
     init_db()
-    _ensure_default_admin()
-    _start_camera()
-
-
-def _ensure_default_admin() -> None:
-    """Create an initial admin user if no users exist."""
-    from database import get_raw_db
-    import models as m
-    from auth import hash_password
-
-    db = get_raw_db()
-    try:
-        users = m.get_all_users(db)
-        if not users:
-            role = m.get_role_by_name(db, "admin")
-            if role:
-                uid = m.create_user(
-                    db,
-                    username="admin",
-                    password_hash=hash_password("changeme123"),
-                    role_id=role["id"],
-                    display_name="Administrator",
-                )
-                logger.warning(
-                    "Default admin created (username=admin password=changeme123). "
-                    "CHANGE THIS PASSWORD IMMEDIATELY after first login."
-                )
-    finally:
-        db.close()
+    if setup_complete():
+        _start_camera()
+    else:
+        logger.info("Setup wizard not yet completed — camera loop deferred")
 
 
 def _start_camera() -> None:
