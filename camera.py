@@ -134,6 +134,22 @@ def get_live_sources() -> list[dict]:
             "active": False,
             "detail": _display_source_url(item["url"]),
         })
+
+    # Tapo as a separate switchable feed (so PTZ controls render even when
+    # detection is using a different primary source).
+    try:
+        from tapo_control import tapo_configured, tapo_settings
+        if tapo_configured() and preferred != "tapo":
+            s = tapo_settings()
+            sources.append({
+                "id": "tapo",
+                "label": "Tapo Camera",
+                "kind": "tapo",
+                "active": False,
+                "detail": f"{s['host']} ({s['stream']})",
+            })
+    except Exception:
+        pass
     return sources
 
 
@@ -442,6 +458,24 @@ class CameraLoop:
         logger.info("IP camera opened: %s", _redact_url(url))
         return cap
 
+    def _open_tapo_camera(self) -> CaptureHandle | None:
+        from tapo_control import tapo_rtsp_url, tapo_settings
+        s = tapo_settings()
+        if not s["host"] or not s["password"]:
+            logger.error("Tapo source selected but host/password are not configured")
+            _camera_status["error"] = "Tapo camera credentials not configured"
+            return None
+
+        url = tapo_rtsp_url(s)
+        cap = _open_stream_capture(url, "Tapo camera", transport="tcp")
+        if cap is None:
+            logger.error("Cannot open Tapo camera stream at %s", _redact_url(url))
+            _camera_status["error"] = "Tapo camera unavailable"
+            return None
+
+        logger.info("Tapo camera opened: %s (%s)", s["host"], s["stream"])
+        return cap
+
     def _run(self) -> None:
         global _night_vision_active
 
@@ -479,7 +513,11 @@ class CameraLoop:
             _camera_status["night_vision"] = initial_ip_night
 
         def primary_source_label() -> str:
-            return "ip" if preferred_source == "ip" else "webcam"
+            if preferred_source == "ip":
+                return "ip"
+            if preferred_source == "tapo":
+                return "tapo"
+            return "webcam"
 
         def try_open_primary_source() -> CaptureHandle | None:
             return self.__try_open_primary(preferred_source)
@@ -561,7 +599,7 @@ class CameraLoop:
             )
             return new_cap
 
-        if preferred_source in {"webcam", "ip"}:
+        if preferred_source in {"webcam", "ip", "tapo"}:
             _camera_status["source"] = primary_source_label()
             cap = try_open_primary_source()
             if cap is None:
@@ -635,7 +673,7 @@ class CameraLoop:
                                 logger.info("Kinect → IR mode (brightness=%.1f)", gray_mean)
                             elif _night_vision_active and gray_mean > (NIGHT_VISION_THRESHOLD + NIGHT_VISION_HYSTERESIS):
                                 if (
-                                    preferred_source in {"webcam", "ip"}
+                                    preferred_source in {"webcam", "ip", "tapo"}
                                     and config.KINECT_NIGHT_VISION_ENABLED
                                 ):
                                     new_cap = switch_to_webcam_day(gray_mean)
@@ -676,7 +714,14 @@ class CameraLoop:
                 else:
                     _camera_status["sls_active"] = False
                     _camera_status["depth"] = False
-                    if preferred_source == "ip":
+                    if preferred_source == "tapo":
+                        # Tapo cameras flip their own IR-cut filter at night;
+                        # don't apply the software green-tint filter.
+                        if _night_vision_active:
+                            _night_vision_active = False
+                            _camera_status["night_vision"] = False
+                        display_frame = frame
+                    elif preferred_source == "ip":
                         # IP cameras can expose IR-cut control via ONVIF. When
                         # enabled, use the same brightness detection as the
                         # webcam path, but send the switch command to the
@@ -897,6 +942,17 @@ class CameraLoop:
                 time.sleep(2)
             _camera_status["error"] = "IP camera unavailable"
             return None
+        if preferred_source == "tapo":
+            for attempt in range(5):
+                if self._stop_flag.is_set():
+                    return None
+                cap = self._open_tapo_camera()
+                if cap:
+                    return cap
+                logger.info("Retrying Tapo camera open (attempt %d/5)", attempt + 1)
+                time.sleep(2)
+            _camera_status["error"] = "Tapo camera unavailable"
+            return None
         return self.__try_open()
 
 
@@ -929,7 +985,7 @@ def _live_bool_setting(key: str, default: bool = False) -> bool:
 def _live_camera_preferred_source() -> str:
     source = _live_setting("camera_preferred_source", config.CAMERA_PREFERRED_SOURCE)
     source = source.strip().lower()
-    return source if source in {"webcam", "ip", "kinect"} else "webcam"
+    return source if source in {"webcam", "ip", "kinect", "tapo"} else "webcam"
 
 
 def _build_ip_onvif_controller(stream_url: str) -> OnvifNightVisionController | None:
@@ -1425,6 +1481,22 @@ def generate_mjpeg(source_id: str = "primary"):
 
     if source_id == "kinect":
         yield from _generate_kinect_mjpeg()
+        return
+
+    if source_id == "tapo":
+        try:
+            from tapo_control import tapo_rtsp_url, tapo_configured
+        except Exception:
+            yield from _generate_error_mjpeg()
+            return
+        if not tapo_configured():
+            yield from _generate_error_mjpeg()
+            return
+        url = tapo_rtsp_url()
+        if not url:
+            yield from _generate_error_mjpeg()
+            return
+        yield from _generate_capture_mjpeg(url, label="Tapo camera")
         return
 
     if source_id.startswith("ip"):

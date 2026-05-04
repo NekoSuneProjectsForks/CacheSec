@@ -40,6 +40,7 @@
           <button type="button"
                   class="btn btn-sm {{ 'btn-danger' if loop.first else 'btn-outline-light' }} live-source-btn"
                   data-source-id="{{ source.id }}"
+                  data-source-kind="{{ source.kind }}"
                   data-stream="{{ url_for('admin.live_stream', source_id=source.id) }}"
                   data-label="{{ source.label }}"
                   data-detail="{{ source.detail }}">
@@ -49,6 +50,8 @@
               <i class="bi bi-badge-3d me-1"></i>
             {% elif source.kind == 'ip' %}
               <i class="bi bi-router me-1"></i>
+            {% elif source.kind == 'tapo' %}
+              <i class="bi bi-camera-reels me-1"></i>
             {% else %}
               <i class="bi bi-bounding-box-circles me-1"></i>
             {% endif %}
@@ -57,10 +60,37 @@
           {% endfor %}
         </div>
       </div>
-      <div class="card-body p-0 text-center bg-black">
+      <div class="card-body p-0 text-center bg-black position-relative">
         <img id="live-feed-image"
              src="{{ url_for('admin.live_stream', source_id=sources[0].id) }}"
              class="img-fluid" style="max-height:70vh;" alt="Live camera feed">
+
+        <!-- Tapo PTZ overlay — toggled by JS based on active source kind -->
+        <div id="tapo-ptz-overlay" class="d-none position-absolute top-0 end-0 m-3 p-2 rounded"
+             style="background: rgba(0,0,0,0.55); border:1px solid #6c757d; min-width:11rem;">
+          <div class="text-center small text-light mb-1">PTZ</div>
+          <div class="d-grid gap-1" style="grid-template-columns:repeat(3, 2.4rem); grid-template-rows:repeat(3, 2.4rem);">
+            <div></div>
+            <button type="button" class="btn btn-sm btn-outline-light tapo-move" data-direction="up"><i class="bi bi-caret-up-fill"></i></button>
+            <div></div>
+            <button type="button" class="btn btn-sm btn-outline-light tapo-move" data-direction="left"><i class="bi bi-caret-left-fill"></i></button>
+            <button type="button" class="btn btn-sm btn-outline-warning tapo-move" data-direction="stop"><i class="bi bi-square-fill"></i></button>
+            <button type="button" class="btn btn-sm btn-outline-light tapo-move" data-direction="right"><i class="bi bi-caret-right-fill"></i></button>
+            <div></div>
+            <button type="button" class="btn btn-sm btn-outline-light tapo-move" data-direction="down"><i class="bi bi-caret-down-fill"></i></button>
+            <div></div>
+          </div>
+          <div class="mt-2">
+            <select id="tapo-presets" class="form-select form-select-sm bg-secondary border-secondary text-light">
+              <option value="">— Presets —</option>
+            </select>
+          </div>
+          <div class="form-check form-switch mt-2">
+            <input class="form-check-input" type="checkbox" id="tapo-privacy">
+            <label class="form-check-label small text-light" for="tapo-privacy">Privacy</label>
+          </div>
+          <div id="tapo-ptz-error" class="small text-warning mt-1"></div>
+        </div>
       </div>
       <div class="card-footer text-muted small">
         Primary feed is the detection process and includes annotations, recordings, screenshots, night-vision/SLS state, and recognition boxes.
@@ -159,10 +189,114 @@
     ip: document.getElementById('sensor-ip'),
   };
   let activeSourceId = sourceButtons.length ? sourceButtons[0].dataset.sourceId : 'primary';
+  let activeSourceKind = sourceButtons.length ? sourceButtons[0].dataset.sourceKind : 'primary';
+  let primaryDetectionSource = '';
+
+  const ptzOverlay = document.getElementById('tapo-ptz-overlay');
+  const ptzError = document.getElementById('tapo-ptz-error');
+  const presetsSelect = document.getElementById('tapo-presets');
+  const privacyToggle = document.getElementById('tapo-privacy');
+
+  function tapoActive() {
+    if (activeSourceKind === 'tapo') return true;
+    if (activeSourceId === 'primary' && primaryDetectionSource === 'tapo') return true;
+    return false;
+  }
+
+  function updatePtzVisibility() {
+    if (!ptzOverlay) return;
+    ptzOverlay.classList.toggle('d-none', !tapoActive());
+  }
+
+  function setPtzError(msg) {
+    if (!ptzError) return;
+    ptzError.textContent = msg || '';
+  }
+
+  function loadPresets() {
+    if (!presetsSelect) return;
+    fetch('/admin/tapo/presets')
+      .then(r => r.json())
+      .then((d) => {
+        presetsSelect.innerHTML = '<option value="">— Presets —</option>';
+        if (d.ok && Array.isArray(d.presets)) {
+          d.presets.forEach((p) => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.name;
+            presetsSelect.appendChild(opt);
+          });
+        }
+      })
+      .catch(() => {});
+  }
+
+  function loadPrivacy() {
+    if (!privacyToggle) return;
+    fetch('/admin/tapo/privacy')
+      .then(r => r.json())
+      .then((d) => {
+        if (d.ok && typeof d.enabled === 'boolean') {
+          privacyToggle.checked = d.enabled;
+        }
+      })
+      .catch(() => {});
+  }
+
+  function tapoMove(direction) {
+    setPtzError('');
+    const body = new URLSearchParams({ direction, speed: '50' });
+    fetch('/admin/tapo/move', { method: 'POST', body })
+      .then(r => r.json())
+      .then((d) => { if (!d.ok) setPtzError(d.error || 'PTZ failed'); })
+      .catch(() => setPtzError('Network error'));
+  }
+
+  document.querySelectorAll('.tapo-move').forEach((btn) => {
+    const dir = btn.dataset.direction;
+    if (dir === 'stop') {
+      btn.addEventListener('click', () => tapoMove('stop'));
+    } else {
+      // Press-and-hold: move on press, stop on release
+      const start = (e) => { e.preventDefault(); tapoMove(dir); };
+      const stop = (e) => { e.preventDefault(); tapoMove('stop'); };
+      btn.addEventListener('mousedown', start);
+      btn.addEventListener('mouseup', stop);
+      btn.addEventListener('mouseleave', stop);
+      btn.addEventListener('touchstart', start, { passive: false });
+      btn.addEventListener('touchend', stop);
+      btn.addEventListener('touchcancel', stop);
+    }
+  });
+
+  if (presetsSelect) {
+    presetsSelect.addEventListener('change', () => {
+      const preset_id = presetsSelect.value;
+      if (!preset_id) return;
+      setPtzError('');
+      const body = new URLSearchParams({ preset_id });
+      fetch('/admin/tapo/preset', { method: 'POST', body })
+        .then(r => r.json())
+        .then((d) => { if (!d.ok) setPtzError(d.error || 'Preset failed'); })
+        .catch(() => setPtzError('Network error'));
+      presetsSelect.value = '';
+    });
+  }
+
+  if (privacyToggle) {
+    privacyToggle.addEventListener('change', () => {
+      const body = new URLSearchParams({ enabled: privacyToggle.checked ? 'true' : 'false' });
+      fetch('/admin/tapo/privacy', { method: 'POST', body })
+        .then(r => r.json())
+        .then((d) => { if (!d.ok) setPtzError(d.error || 'Privacy toggle failed'); })
+        .catch(() => setPtzError('Network error'));
+    });
+  }
 
   sourceButtons.forEach((button) => {
     button.addEventListener('click', () => {
       activeSourceId = button.dataset.sourceId || 'primary';
+      activeSourceKind = button.dataset.sourceKind || 'primary';
       sourceButtons.forEach((candidate) => {
         candidate.classList.toggle('btn-danger', candidate === button);
         candidate.classList.toggle('btn-outline-light', candidate !== button);
@@ -171,6 +305,8 @@
       detail.textContent = button.dataset.detail || '';
       const separator = button.dataset.stream.includes('?') ? '&' : '?';
       image.src = `${button.dataset.stream}${separator}t=${Date.now()}`;
+      updatePtzVisibility();
+      if (tapoActive()) { loadPresets(); loadPrivacy(); }
       pollStatus();
     });
   });
@@ -190,6 +326,12 @@
           slsBadge.classList.remove('d-none');
         } else {
           slsBadge.classList.add('d-none');
+        }
+        const detection = (d.camera_source || d.source || '').toLowerCase();
+        if (detection !== primaryDetectionSource) {
+          primaryDetectionSource = detection;
+          updatePtzVisibility();
+          if (tapoActive()) { loadPresets(); loadPrivacy(); }
         }
       })
       .catch(() => {});
@@ -220,6 +362,8 @@
     el.classList.add(good ? 'bg-success' : 'bg-warning');
   }
 
+  updatePtzVisibility();
+  if (tapoActive()) { loadPresets(); loadPrivacy(); }
   pollStatus();
   setInterval(pollStatus, 3000);
 })();

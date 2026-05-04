@@ -56,7 +56,7 @@ FRAME_WIDTH: int = _int("FRAME_WIDTH", 640)
 FRAME_HEIGHT: int = _int("FRAME_HEIGHT", 480)
 UNKNOWN_COOLDOWN_SECONDS: int = _int("UNKNOWN_COOLDOWN_SECONDS", 10)
 CAMERA_PREFERRED_SOURCE: str = os.getenv("CAMERA_PREFERRED_SOURCE", "webcam").strip().lower()
-if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect", "ip"}:
+if CAMERA_PREFERRED_SOURCE not in {"webcam", "kinect", "ip", "tapo"}:
     CAMERA_PREFERRED_SOURCE = "webcam"
 IP_CAMERA_URL: str = os.getenv("IP_CAMERA_URL", "").strip()
 IP_CAMERA_URLS: str = os.getenv("IP_CAMERA_URLS", "").strip()
@@ -71,6 +71,21 @@ IP_CAMERA_ONVIF_PORT: int = _int("IP_CAMERA_ONVIF_PORT", 0)
 IP_CAMERA_ONVIF_USERNAME: str = os.getenv("IP_CAMERA_ONVIF_USERNAME", "").strip()
 IP_CAMERA_ONVIF_PASSWORD: str = os.getenv("IP_CAMERA_ONVIF_PASSWORD", "")
 IP_CAMERA_ONVIF_WSDL_DIR: str = os.getenv("IP_CAMERA_ONVIF_WSDL_DIR", "").strip()
+
+# ---------------------------------------------------------------------------
+# TP-Link Tapo cameras (pytapo)
+# ---------------------------------------------------------------------------
+# pytapo speaks to the camera's local HTTP API (presets, motor, privacy mode)
+# and provides RTSP credentials for the video feed. Use the "Camera Account"
+# user/password set in the Tapo mobile app under "Advanced Settings →
+# Camera Account", NOT the cloud account.
+TAPO_HOST: str = os.getenv("TAPO_HOST", "").strip()
+TAPO_USERNAME: str = os.getenv("TAPO_USERNAME", "admin").strip()
+TAPO_PASSWORD: str = os.getenv("TAPO_PASSWORD", "")
+TAPO_CLOUD_PASSWORD: str = os.getenv("TAPO_CLOUD_PASSWORD", "")
+TAPO_STREAM: str = os.getenv("TAPO_STREAM", "stream1").strip().lower()
+if TAPO_STREAM not in {"stream1", "stream2"}:
+    TAPO_STREAM = "stream1"
 
 # ---------------------------------------------------------------------------
 # Recording
