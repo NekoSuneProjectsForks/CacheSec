@@ -43,7 +43,6 @@
           <input type="hidden" name="tapo_host"         id="tapo_host"         value="{{ settings.tapo_host or '' }}">
           <input type="hidden" name="tapo_username"     id="tapo_username"     value="{{ settings.tapo_username or 'admin' }}">
           <input type="hidden" name="tapo_password"     id="tapo_password"     value="{{ settings.tapo_password or '' }}">
-          <input type="hidden" name="tapo_cloud_password" id="tapo_cloud_password" value="{{ settings.tapo_cloud_password or '' }}">
           <input type="hidden" name="tapo_stream"       id="tapo_stream"       value="{{ settings.tapo_stream or 'stream1' }}">
 
           <div class="col-12">
@@ -557,14 +556,6 @@
             This is <em>not</em> the cloud login.
           </div>
           <div class="mb-3">
-            <label class="form-label">Tapo cloud password (optional)</label>
-            <input type="password" id="cam-tapo-cloud-password"
-                   class="form-control bg-secondary border-secondary text-light">
-            <div class="form-text text-muted">
-              Required by some firmware versions for PTZ/preset commands.
-            </div>
-          </div>
-          <div class="mb-3">
             <label class="form-label">Stream quality</label>
             <select id="cam-tapo-stream" class="form-select bg-secondary border-secondary text-light">
               <option value="stream1">High (stream1)</option>
@@ -742,7 +733,6 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
       modal.querySelector('#cam-tapo-host').value = document.getElementById('tapo_host').value;
       modal.querySelector('#cam-tapo-username').value = document.getElementById('tapo_username').value || 'admin';
       modal.querySelector('#cam-tapo-password').value = document.getElementById('tapo_password').value;
-      modal.querySelector('#cam-tapo-cloud-password').value = document.getElementById('tapo_cloud_password').value;
       modal.querySelector('#cam-tapo-stream').value = document.getElementById('tapo_stream').value || 'stream1';
     } else {
       const ipRadio = modal.querySelector('input[name="cam_type"][value="ip"]');
@@ -781,8 +771,6 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
           modal.querySelector('#cam-tapo-username').value.trim() || 'admin';
         document.getElementById('tapo_password').value =
           modal.querySelector('#cam-tapo-password').value;
-        document.getElementById('tapo_cloud_password').value =
-          modal.querySelector('#cam-tapo-cloud-password').value;
         document.getElementById('tapo_stream').value =
           modal.querySelector('#cam-tapo-stream').value || 'stream1';
         detail = host || 'Not configured';

@@ -19,7 +19,7 @@ admin dashboard accessible locally or remotely through Cloudflare Tunnel.
 | Recording | Auto-start/stop with min/max duration enforcement; local saving and microphone audio are configurable |
 | Multi-camera detection | Extra USB, Kinect, and IP cameras can run the same detection loop as the primary feed |
 | Camera management | `+ Add Camera` modal with per-type fields (USB / Pi, IP / RTSP, Kinect, Tapo); per-row edit and remove for live-only feeds |
-| TP-Link Tapo support | Native source type with PTZ (pan/tilt) overlay, presets, and privacy-mode toggle on the live feed |
+| TP-Link Tapo support | Native source type that consumes the camera's RTSP stream with Camera Account credentials |
 | Optional object detection | Detectron2 can detect people, pets/animals, or all COCO objects when installed separately |
 | Motion detection | Frame-difference moving-object detection can be enabled per camera |
 | Sound | GPIO PWM buzzer (access-denied tone on unknown) |
@@ -42,7 +42,7 @@ cachesec/
 ├── camera.py               # Camera capture + detection loop
 ├── recognition.py          # InsightFace embedding + matching
 ├── recorder.py             # Video recording state machine
-├── tapo_control.py         # pytapo wrapper: PTZ, presets, privacy mode
+├── tapo_control.py         # Tapo RTSP URL builder
 ├── discord_notify.py       # Discord webhook integration
 ├── sound.py                # GPIO buzzer abstraction
 ├── sounds.py               # Original GPIO tone primitives
@@ -140,7 +140,6 @@ nano .env
 | `IP_CAMERA_ONVIF_HOST` / `IP_CAMERA_ONVIF_PORT` | Optional ONVIF endpoint override if the control port differs from the stream URL |
 | `TAPO_HOST` | LAN IP / hostname of the Tapo camera (e.g. `192.168.1.60`) |
 | `TAPO_USERNAME` / `TAPO_PASSWORD` | "Camera Account" credentials set in the Tapo app under *Advanced Settings → Camera Account* (NOT the cloud login) |
-| `TAPO_CLOUD_PASSWORD` | Optional Tapo cloud password — required by some firmware versions for PTZ/preset commands |
 | `TAPO_STREAM` | `stream1` (high) or `stream2` (low) |
 | `SAVE_RECORDINGS_LOCALLY` | Set `false` to upload completed clips to Discord and remove local video files |
 | `RECORD_AUDIO_ENABLED` | Optional microphone/IP-camera audio capture for recordings; defaults to `false` |
@@ -359,10 +358,8 @@ docker compose up -d
 
 ### TP-Link Tapo cameras
 
-CacheSec speaks the Tapo C-series local HTTP API via [pytapo](https://pypi.org/project/pytapo/)
-for PTZ, presets, and privacy mode. Streaming itself uses the camera's
-built-in RTSP feed. No host device passthrough is needed — Tapo cameras are
-on the LAN.
+CacheSec uses Tapo C-series cameras as a regular RTSP source. No host device
+passthrough is needed — Tapo cameras live on the LAN.
 
 **One-time setup on the camera:**
 
@@ -373,15 +370,8 @@ on the LAN.
 **In CacheSec:**
 
 1. Open **Settings**, click **Change** next to *Primary Detection Camera*.
-2. Pick **Tapo**, fill in the IP, camera-account user/password, and (optional)
-   the cloud password if your firmware requires it for PTZ.
+2. Pick **Tapo**, fill in the IP and the camera-account user/password.
 3. Save and restart the app.
-
-The live-feed page shows a PTZ overlay on the top-right of the Tapo feed:
-
-- Press-and-hold arrow buttons to pan/tilt; release to stop.
-- Preset dropdown — runs presets configured in the Tapo app.
-- Privacy switch — toggles the camera's hardware privacy shutter.
 
 Tapo cameras flip their own IR-cut filter automatically, so CacheSec disables
 the software green-tint night-vision overlay on Tapo feeds.

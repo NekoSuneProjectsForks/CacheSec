@@ -100,16 +100,14 @@ MOVING_OBJECT_MIN_AREA: int = _int("MOVING_OBJECT_MIN_AREA", 2500)
 MOVING_OBJECT_THRESHOLD: int = _int("MOVING_OBJECT_THRESHOLD", 25)
 
 # ---------------------------------------------------------------------------
-# TP-Link Tapo cameras (pytapo)
+# TP-Link Tapo cameras (RTSP only)
 # ---------------------------------------------------------------------------
-# pytapo speaks to the camera's local HTTP API (presets, motor, privacy mode)
-# and provides RTSP credentials for the video feed. Use the "Camera Account"
-# user/password set in the Tapo mobile app under "Advanced Settings →
-# Camera Account", NOT the cloud account.
+# Tapo C-series cameras are used as a regular RTSP source. The username and
+# password are the "Camera Account" set in the Tapo app under
+# Advanced Settings → Camera Account (NOT the cloud login).
 TAPO_HOST: str = os.getenv("TAPO_HOST", "").strip()
 TAPO_USERNAME: str = os.getenv("TAPO_USERNAME", "admin").strip()
 TAPO_PASSWORD: str = os.getenv("TAPO_PASSWORD", "")
-TAPO_CLOUD_PASSWORD: str = os.getenv("TAPO_CLOUD_PASSWORD", "")
 TAPO_STREAM: str = os.getenv("TAPO_STREAM", "stream1").strip().lower()
 if TAPO_STREAM not in {"stream1", "stream2"}:
     TAPO_STREAM = "stream1"

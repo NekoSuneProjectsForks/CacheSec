@@ -54,11 +54,6 @@ requests==2.32.3
 # ---- IP camera control ----
 onvif-zeep==0.2.12
 
-# ---- TP-Link Tapo cameras (optional) ----
-# pytapo speaks the Tapo C-series local HTTP API for PTZ, presets, and
-# privacy mode. Streaming itself uses the camera's RTSP URL.
-pytapo>=3.3.39
-
 # ---- Proxy / Cloudflare ----
 # Werkzeug ProxyFix is included with Flask; no separate install needed.
 Werkzeug==3.1.8

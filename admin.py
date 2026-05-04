@@ -126,74 +126,6 @@ def live_stream(source_id: str = "primary"):
 
 
 # ---------------------------------------------------------------------------
-# Tapo PTZ controls
-# ---------------------------------------------------------------------------
-
-@admin_bp.route("/tapo/move", methods=["POST"])
-@operator_required
-def tapo_move():
-    from tapo_control import get_tapo_controller, tapo_configured
-    if not tapo_configured():
-        return jsonify(ok=False, error="Tapo camera not configured"), 400
-    direction = (request.values.get("direction") or "").strip().lower()
-    try:
-        speed = int(request.values.get("speed") or 50)
-    except (TypeError, ValueError):
-        speed = 50
-    ok, err = get_tapo_controller().move(direction, speed=speed)
-    if ok:
-        audit("TAPO_MOVE", user_id=session["user_id"], username=session["username"],
-              detail=f"direction={direction} speed={speed}", ip_address=get_client_ip())
-    return jsonify(ok=ok, error=err)
-
-
-@admin_bp.route("/tapo/presets", methods=["GET"])
-@operator_required
-def tapo_presets():
-    from tapo_control import get_tapo_controller, tapo_configured
-    if not tapo_configured():
-        return jsonify(ok=False, presets=[], error="Tapo camera not configured"), 400
-    presets = get_tapo_controller().list_presets()
-    return jsonify(ok=True, presets=presets)
-
-
-@admin_bp.route("/tapo/preset", methods=["POST"])
-@operator_required
-def tapo_goto_preset():
-    from tapo_control import get_tapo_controller, tapo_configured
-    if not tapo_configured():
-        return jsonify(ok=False, error="Tapo camera not configured"), 400
-    preset_id = (request.values.get("preset_id") or "").strip()
-    ok, err = get_tapo_controller().go_to_preset(preset_id)
-    if ok:
-        audit("TAPO_PRESET", user_id=session["user_id"], username=session["username"],
-              detail=f"preset={preset_id}", ip_address=get_client_ip())
-    return jsonify(ok=ok, error=err)
-
-
-@admin_bp.route("/tapo/privacy", methods=["GET", "POST"])
-@operator_required
-def tapo_privacy():
-    from tapo_control import get_tapo_controller, tapo_configured
-    if not tapo_configured():
-        return jsonify(ok=False, error="Tapo camera not configured"), 400
-    ctrl = get_tapo_controller()
-    if request.method == "GET":
-        enabled = ctrl.get_privacy_mode()
-        if enabled is None:
-            err = getattr(ctrl, "_last_init_error", "") or "Tapo unreachable"
-            return jsonify(ok=False, error=f"Tapo connection failed: {err}")
-        return jsonify(ok=True, enabled=enabled)
-    raw = (request.values.get("enabled") or "").strip().lower()
-    enabled = raw in {"1", "true", "yes", "on"}
-    ok, err = ctrl.set_privacy_mode(enabled)
-    if ok:
-        audit("TAPO_PRIVACY", user_id=session["user_id"], username=session["username"],
-              detail=f"enabled={enabled}", ip_address=get_client_ip())
-    return jsonify(ok=ok, enabled=enabled, error=err)
-
-
-# ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
 
@@ -855,7 +787,6 @@ def settings():
         "tapo_host",
         "tapo_username",
         "tapo_password",
-        "tapo_cloud_password",
         "tapo_stream",
         "unknown_cooldown_seconds",
         "object_detection_backend",
