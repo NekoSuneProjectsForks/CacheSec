@@ -179,7 +179,11 @@ def tapo_privacy():
         return jsonify(ok=False, error="Tapo camera not configured"), 400
     ctrl = get_tapo_controller()
     if request.method == "GET":
-        return jsonify(ok=True, enabled=ctrl.get_privacy_mode())
+        enabled = ctrl.get_privacy_mode()
+        if enabled is None:
+            err = getattr(ctrl, "_last_init_error", "") or "Tapo unreachable"
+            return jsonify(ok=False, error=f"Tapo connection failed: {err}")
+        return jsonify(ok=True, enabled=enabled)
     raw = (request.values.get("enabled") or "").strip().lower()
     enabled = raw in {"1", "true", "yes", "on"}
     ok, err = ctrl.set_privacy_mode(enabled)

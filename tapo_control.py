@@ -65,29 +65,35 @@ class TapoController:
         self._lock = threading.Lock()
         self._client: Any | None = None
         self._signature: tuple[str, str, str] = ("", "", "")
+        self._last_init_error: str = ""
 
     def _signature_for(self, s: dict[str, str]) -> tuple[str, str, str]:
         return (s["host"], s["username"], s["cloud_password"] or s["password"])
 
     def _build(self, s: dict[str, str]) -> Any | None:
         if not s["host"] or not (s["password"] or s["cloud_password"]):
+            self._last_init_error = "host or password not set"
             return None
         try:
             from pytapo import Tapo
         except ImportError:
+            self._last_init_error = "pytapo not installed"
             logger.warning("pytapo is not installed; Tapo controls disabled")
             return None
         # pytapo accepts the camera-account password as `password` and the
         # cloud password (used for some firmware versions) as
         # `cloudPassword`. Pass both when available.
         try:
-            return Tapo(
+            client = Tapo(
                 s["host"],
                 s["username"] or "admin",
                 s["password"],
                 cloudPassword=s["cloud_password"] or s["password"],
             )
+            self._last_init_error = ""
+            return client
         except Exception as exc:
+            self._last_init_error = str(exc)
             logger.warning("Tapo client init failed: %s", exc)
             return None
 
@@ -97,6 +103,7 @@ class TapoController:
             if self._client is None or sig != self._signature:
                 self._client = self._build(s)
                 self._signature = sig
+                self._last_init_error = getattr(self, "_last_init_error", "")
             return self._client
 
     def _invalidate(self) -> None:
@@ -107,7 +114,8 @@ class TapoController:
         s = tapo_settings()
         client = self._client_for(s)
         if client is None:
-            return False, "Tapo camera not configured"
+            err = self._last_init_error or "Tapo camera not configured"
+            return False, f"Tapo connection failed: {err}"
         try:
             getattr(client, fn_name)(*args, **kwargs)
             return True, ""

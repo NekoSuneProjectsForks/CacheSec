@@ -232,6 +232,9 @@
       .then((d) => {
         if (d.ok && typeof d.enabled === 'boolean') {
           privacyToggle.checked = d.enabled;
+          setPtzError('');
+        } else if (d.error) {
+          setPtzError(d.error);
         }
       })
       .catch(() => {});
