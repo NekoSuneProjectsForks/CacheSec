@@ -130,11 +130,16 @@ def wizard():
         return redirect(url_for("admin.dashboard"))
 
     cams = _load_cams() if state == "cameras" else []
-    return render_template(
+    resp = render_template(
         "setup/wizard.html",
         step=state,
         cams=[{**c, "describe": _cam_describe(c)} for c in cams],
     )
+    from flask import make_response
+    response = make_response(resp)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 # --------- ADMIN ----------
@@ -337,6 +342,10 @@ def _expand_cameras_into_settings(cams: list[dict]) -> None:
 @setup_bp.route("/discord", methods=["POST"])
 def submit_discord():
     if not _has_users():
+        return redirect(url_for("setup.wizard"))
+    # Don't allow jumping straight from admin → done with a stale form.
+    if not _cameras_decided():
+        flash("Please finish the camera step first.", "warning")
         return redirect(url_for("setup.wizard"))
 
     uid = session.get("user_id")
