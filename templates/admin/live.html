@@ -3,21 +3,10 @@
 {% block page_title %}<i class="bi bi-camera-video-fill me-2"></i>Live Camera Feed{% endblock %}
 
 {% block content %}
-{% set sources = live_sources or [{
-  'id': 'primary',
-  'label': 'Primary Detection Feed',
-  'kind': 'primary',
-  'detail': 'detection process',
-  'active': True
-}] %}
-{% set ns = namespace(primary=None, webcam=None, kinect=None) %}
-{% for source in sources %}
-  {% if source.id == 'primary' %}{% set ns.primary = source %}{% endif %}
-  {% if source.id == 'webcam' %}{% set ns.webcam = source %}{% endif %}
-  {% if source.id == 'kinect' %}{% set ns.kinect = source %}{% endif %}
-{% endfor %}
+{% set sources = live_sources or [] %}
 <div class="row justify-content-center">
   <div class="col-lg-10">
+    {% if sources %}
     <div class="card cs-card">
       <div class="card-header cs-card-header d-flex flex-column flex-lg-row justify-content-between gap-3">
         <div>
@@ -42,6 +31,7 @@
                   data-source-id="{{ source.id }}"
                   data-source-kind="{{ source.kind }}"
                   data-stream="{{ url_for('admin.live_stream', source_id=source.id) }}"
+                  data-go2rtc-stream="{{ source.go2rtc_stream or '' }}"
                   data-label="{{ source.label }}"
                   data-detail="{{ source.detail }}">
             {% if source.kind == 'webcam' %}
@@ -60,16 +50,37 @@
           {% endfor %}
         </div>
       </div>
-      <div class="card-body p-0 text-center bg-black">
-        <img id="live-feed-image"
-             src="{{ url_for('admin.live_stream', source_id=sources[0].id) }}"
-             class="img-fluid" style="max-height:70vh;" alt="Live camera feed">
+      <div class="card-body p-0 text-center bg-black position-relative" id="live-feed-container">
+        {# JS swaps these in/out depending on which source is active. #}
+        <video id="live-feed-video" class="img-fluid d-none"
+               style="max-height:70vh; width:100%;" autoplay muted playsinline></video>
+        <img id="live-feed-image" class="img-fluid d-none"
+             style="max-height:70vh;" alt="Live camera feed">
+        <button type="button" id="audio-toggle"
+                class="btn btn-sm btn-dark border-secondary d-none position-absolute"
+                style="bottom:0.75rem; right:0.75rem; opacity:0.85;"
+                title="Toggle audio">
+          <i class="bi bi-volume-mute-fill" id="audio-icon"></i>
+          <span class="ms-1" id="audio-label">Muted</span>
+        </button>
       </div>
       <div class="card-footer text-muted small">
-        Primary feed is the detection process and includes annotations, recordings, screenshots, night-vision/SLS state, and recognition boxes.
-        Extra cameras can also run detection when enabled in Settings. RTSP, HLS/M3U8, MJPEG/HTTP video, and snapshot image URLs are proxied as MJPEG.
+        IP / Tapo cameras stream native H.264 via go2rtc (low-latency MSE).
+        USB / Kinect feeds use MJPEG.
       </div>
     </div>
+    {% else %}
+    <div class="card cs-card">
+      <div class="card-body text-center py-5">
+        <i class="bi bi-camera-video-off text-muted" style="font-size:3rem;"></i>
+        <h5 class="mt-3">No cameras configured</h5>
+        <p class="text-muted small mb-3">Add a camera in Settings to start streaming and detection.</p>
+        <a href="{{ url_for('admin.settings') }}" class="btn btn-danger btn-sm">
+          <i class="bi bi-gear-fill me-1"></i>Open Settings
+        </a>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
 
@@ -79,7 +90,7 @@
     <div class="card cs-card">
       <div class="card-header cs-card-header d-flex justify-content-between align-items-center">
         <div>
-          <i class="bi bi-grid-3x3-gap-fill me-2"></i>Multi-Camera Grid
+          <i class="bi bi-grid-3x3-gap-fill me-2"></i>All Cameras
         </div>
         <span class="badge bg-success blink-dot"><i class="bi bi-circle-fill me-1"></i>LIVE</span>
       </div>
@@ -87,11 +98,19 @@
         <div class="row g-3">
           {% for source in sources %}
           <div class="col-12 col-md-6 col-xl-4">
-            <div class="small text-muted mb-2 text-truncate">{{ source.label }}</div>
+            <div class="small text-muted mb-2 text-truncate">
+              {{ source.label }}
+              {% if source.detection %}<span class="badge bg-danger ms-1">Detection</span>{% endif %}
+            </div>
             <div class="bg-black rounded overflow-hidden text-center">
+              {% if source.go2rtc_stream %}
+              <video class="img-fluid live-grid-vid" autoplay muted playsinline
+                     src="{{ url_for('admin.go2rtc_proxy', subpath='api/stream.mp4') }}?src={{ source.go2rtc_stream }}"></video>
+              {% else %}
               <img src="{{ url_for('admin.live_stream', source_id=source.id) }}"
                    class="img-fluid live-grid-img"
                    alt="{{ source.label }}">
+              {% endif %}
             </div>
           </div>
           {% endfor %}
@@ -136,9 +155,59 @@
   const nvBadge = document.getElementById('nv-badge');
   const slsBadge = document.getElementById('sls-badge');
   const image = document.getElementById('live-feed-image');
+  const video = document.getElementById('live-feed-video');
   const title = document.getElementById('live-feed-title');
   const detail = document.getElementById('live-feed-detail');
   const sourceButtons = Array.from(document.querySelectorAll('.live-source-btn'));
+  const GO2RTC_STREAM_URL = "{{ url_for('admin.go2rtc_proxy', subpath='api/stream.mp4') }}";
+
+  const audioToggle = document.getElementById('audio-toggle');
+  const audioIcon = document.getElementById('audio-icon');
+  const audioLabel = document.getElementById('audio-label');
+
+  function refreshAudioButton() {
+    if (!audioToggle) return;
+    audioIcon.className = video.muted ? 'bi bi-volume-mute-fill' : 'bi bi-volume-up-fill';
+    audioLabel.textContent = video.muted ? 'Muted' : 'Audio on';
+  }
+
+  if (audioToggle) {
+    audioToggle.addEventListener('click', () => {
+      video.muted = !video.muted;
+      // If we just unmuted, the browser may need a fresh play() after a user gesture.
+      if (!video.muted) video.play().catch(() => {});
+      refreshAudioButton();
+    });
+  }
+
+  function showSource(button) {
+    title.textContent = button.dataset.label || 'Live Feed';
+    detail.textContent = button.dataset.detail || '';
+    const go2rtcStream = button.dataset.go2rtcStream || '';
+    if (go2rtcStream) {
+      // Native H.264 via go2rtc fMP4 — no JPEG re-encode.
+      image.classList.add('d-none');
+      image.removeAttribute('src');
+      video.classList.remove('d-none');
+      video.muted = true;  // browsers block autoplay-with-sound; user clicks to unmute
+      // go2rtc serves a live (open-ended) fMP4 stream when no `duration`
+      // param is set. The container muxes H.264 video + AAC audio (the
+      // ffmpeg transcoder defined in go2rtc.yaml handles G.711 → AAC).
+      video.src = `${GO2RTC_STREAM_URL}?src=${encodeURIComponent(go2rtcStream)}`;
+      video.load();
+      video.play().catch(() => {});
+      if (audioToggle) audioToggle.classList.remove('d-none');
+      refreshAudioButton();
+    } else {
+      // USB / Kinect — MJPEG fallback (no audio).
+      video.classList.add('d-none');
+      video.removeAttribute('src');
+      image.classList.remove('d-none');
+      if (audioToggle) audioToggle.classList.add('d-none');
+      const sep = button.dataset.stream.includes('?') ? '&' : '?';
+      image.src = `${button.dataset.stream}${sep}t=${Date.now()}`;
+    }
+  }
   const sensorEls = {
     cameraRunning: document.getElementById('sensor-camera-running'),
     cameraSource: document.getElementById('sensor-camera-source'),
@@ -164,13 +233,13 @@
         candidate.classList.toggle('btn-danger', candidate === button);
         candidate.classList.toggle('btn-outline-light', candidate !== button);
       });
-      title.textContent = button.dataset.label || 'Live Feed';
-      detail.textContent = button.dataset.detail || '';
-      const separator = button.dataset.stream.includes('?') ? '&' : '?';
-      image.src = `${button.dataset.stream}${separator}t=${Date.now()}`;
+      showSource(button);
       pollStatus();
     });
   });
+
+  // Initial render — show the first source's feed.
+  if (sourceButtons.length > 0) showSource(sourceButtons[0]);
 
   function pollStatus() {
     fetch('/admin/api/status')

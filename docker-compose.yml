@@ -44,11 +44,14 @@ services:
       VIDEO_ENCODER_QUALITY: ${VIDEO_ENCODER_QUALITY:-26}
     volumes:
       - cachesec-data:/data
+      - go2rtc-config:/data/go2rtc
       # Required for Kinect v1 / OpenKinect USB access.
       # - /dev/bus/usb:/dev/bus/usb
       # Optional Intel/AMD VAAPI/Quick Sync device access.
       # - /dev/dri:/dev/dri
     stop_grace_period: 30s
+    depends_on:
+      - go2rtc
     # Required for Kinect v1 / OpenKinect USB access.
     # privileged: true
     # Uncomment these if you want direct host hardware access from the container.
@@ -67,5 +70,22 @@ services:
     # VIDEO_ENCODER=h264_nvenc. CPU-only hosts should leave this commented.
     # gpus: all
 
+  go2rtc:
+    container_name: cachesec-go2rtc
+    image: alexxit/go2rtc:latest
+    restart: unless-stopped
+    # go2rtc reads /config/go2rtc.yaml. CacheSec writes that file to the
+    # shared volume whenever the camera list changes.
+    volumes:
+      - go2rtc-config:/config
+    ports:
+      # 1984: HTTP API + Web UI + WebSocket (MSE) endpoint. Used by the
+      # browser through CacheSec's reverse-proxy passthrough.
+      - "${GO2RTC_HTTP_PORT:-1984}:1984"
+      # 8554: RTSP relay — CacheSec's detection loop pulls from here so
+      # cameras only see one connection (go2rtc demuxes to all consumers).
+      - "${GO2RTC_RTSP_PORT:-8554}:8554"
+
 volumes:
   cachesec-data:
+  go2rtc-config:

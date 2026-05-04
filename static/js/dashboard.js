@@ -101,13 +101,20 @@
     fetch('/admin/api/status')
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (d.camera_running) {
+        // "Live" reflects whether any camera is configured for streaming.
+        // "Detection" status (the loop running face recognition) is separate.
+        const liveCount = d.live_camera_count || 0;
+        const detCount = d.detection_camera_count || 0;
+        if (liveCount > 0) {
           camBadge.className = 'badge bg-success';
-          const source = d.camera_source === 'ip' ? 'IP' : (d.camera_source === 'kinect' ? 'Kinect' : 'Live');
-          camLabel.textContent = d.night_vision ? source + ' NV' : source;
+          if (detCount > 0) {
+            camLabel.textContent = d.night_vision ? `Live · Detection · NV` : `Live · Detection`;
+          } else {
+            camLabel.textContent = `Live · ${liveCount} cam${liveCount === 1 ? '' : 's'}`;
+          }
         } else {
-          camBadge.className = 'badge bg-danger';
-          camLabel.textContent = d.camera_error || 'Offline';
+          camBadge.className = 'badge bg-secondary';
+          camLabel.textContent = 'No cameras';
         }
 
         if (recBadge && recLabel) {

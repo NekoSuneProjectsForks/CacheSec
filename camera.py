@@ -92,39 +92,76 @@ def get_camera_status() -> dict:
 
 
 def get_live_sources() -> list[dict]:
-    preferred = _live_camera_preferred_source()
-    sources = [{
-        "id": "primary",
-        "label": "Primary Detection Feed",
-        "kind": "primary",
-        "active": True,
-        "detail": _camera_status.get("source", preferred),
-    }]
-    for spec in _live_auxiliary_source_specs(preferred):
-        sources.append({
-            "id": spec.id,
-            "label": spec.label,
-            "kind": spec.kind,
-            "active": False,
-            "detail": spec.detail,
-        })
+    """One live source per camera the user added in the wizard.
 
-    # Tapo as a separate switchable feed (so PTZ controls render even when
-    # detection is using a different primary source).
+    For IP / Tapo cameras the source includes `go2rtc_stream`, the stream
+    name go2rtc serves the H.264 packets under. The browser pulls fMP4
+    from /admin/go2rtc/api/stream.mp4?src=<go2rtc_stream> for those.
+
+    USB / Kinect cameras don't use go2rtc; they render via MJPEG (the
+    existing /admin/live/stream/<id> endpoint).
+    """
+    import json
+    sources: list[dict] = []
     try:
-        from tapo_control import tapo_configured, tapo_settings
-        if tapo_configured() and preferred != "tapo":
-            s = tapo_settings()
-            sources.append({
-                "id": "tapo",
-                "label": "Tapo Camera",
-                "kind": "tapo",
-                "active": False,
-                "detail": f"{s['host']} ({s['stream']})",
-            })
+        raw = _live_setting("setup_cameras", "")
+        cams = json.loads(raw) if raw else []
+        if not isinstance(cams, list):
+            cams = []
     except Exception:
-        pass
+        cams = []
+
+    for cam in cams:
+        cam_id = cam.get("id", "")
+        cam_type = cam.get("type", "")
+        label = cam.get("label") or _wizard_cam_describe(cam)
+        detail = _wizard_cam_describe(cam)
+        if cam_type in {"ip", "tapo"}:
+            sources.append({
+                "id": f"cam_{cam_id}",
+                "label": label,
+                "kind": cam_type,
+                "active": False,
+                "detail": detail,
+                "go2rtc_stream": f"cam_{cam_id}",
+                "detection": bool(cam.get("detection")),
+            })
+        elif cam_type == "webcam":
+            idx = int(cam.get("index", 0))
+            sources.append({
+                "id": f"webcam{idx}" if idx != config.CAMERA_INDEX else "webcam",
+                "label": label,
+                "kind": "webcam",
+                "active": False,
+                "detail": f"/dev/video{idx}",
+                "go2rtc_stream": "",
+                "detection": bool(cam.get("detection")),
+            })
+        elif cam_type == "kinect":
+            sources.append({
+                "id": "kinect",
+                "label": label,
+                "kind": "kinect",
+                "active": False,
+                "detail": "Kinect v1",
+                "go2rtc_stream": "",
+                "detection": bool(cam.get("detection")),
+            })
     return sources
+
+
+def _wizard_cam_describe(cam: dict) -> str:
+    t = cam.get("type", "")
+    if t == "tapo":
+        return f"Tapo · {cam.get('host', '')}"
+    if t == "ip":
+        url = cam.get("url", "")
+        return f"IP · {url[:60]}"
+    if t == "webcam":
+        return f"USB / Pi · /dev/video{cam.get('index', 0)}"
+    if t == "kinect":
+        return "Kinect v1"
+    return t
 
 
 class FFmpegFrameCapture:
@@ -661,13 +698,18 @@ class CameraLoop:
             _camera_status["error"] = "IP camera URL must use rtsp://, http://, or https://"
             return None
 
-        cap = _open_stream_capture(url, "IP camera", transport=transport)
+        # Prefer the go2rtc relay so the camera only sees a single connection.
+        relay = _go2rtc_relay_for_primary("ip")
+        open_url = relay or url
+
+        cap = _open_stream_capture(open_url, "IP camera", transport=transport)
         if cap is None:
-            logger.error("Cannot open IP camera stream: %s", _redact_url(url))
+            logger.error("Cannot open IP camera stream: %s", _redact_url(open_url))
             _camera_status["error"] = "IP camera unavailable"
             return None
 
-        logger.info("IP camera opened: %s", _redact_url(url))
+        logger.info("IP camera opened: %s%s",
+                    _redact_url(open_url), " (via go2rtc)" if relay else "")
         return cap
 
     def _open_tapo_camera(self) -> CaptureHandle | None:
@@ -678,14 +720,17 @@ class CameraLoop:
             _camera_status["error"] = "Tapo camera credentials not configured"
             return None
 
-        url = tapo_rtsp_url(s)
+        relay = _go2rtc_relay_for_primary("tapo")
+        url = relay or tapo_rtsp_url(s)
+
         cap = _open_stream_capture(url, "Tapo camera", transport="tcp")
         if cap is None:
             logger.error("Cannot open Tapo camera stream at %s", _redact_url(url))
             _camera_status["error"] = "Tapo camera unavailable"
             return None
 
-        logger.info("Tapo camera opened: %s (%s)", s["host"], s["stream"])
+        logger.info("Tapo camera opened: %s (%s)%s",
+                    s["host"], s["stream"], " via go2rtc" if relay else "")
         return cap
 
     def _run(self) -> None:
@@ -1158,6 +1203,19 @@ def _live_camera_preferred_source() -> str:
     return source if source in {"webcam", "ip", "kinect", "tapo", "none"} else "none"
 
 
+def _go2rtc_relay_for_primary(cam_type: str) -> str:
+    """Previously routed the detection loop through go2rtc to share a single
+    camera connection. That caused MSE stutters in the browser: when
+    OpenCV closed its RTSP read between frames, go2rtc dropped the producer
+    (no consumers left), which restarted the browser's MSE buffer.
+
+    Now detection pulls the camera directly. go2rtc only serves the
+    browser-facing fMP4 + AAC transcode. The Tapo / IP camera sees two
+    connections (one from cachesec, one from go2rtc), but both are stable.
+    """
+    return ""
+
+
 def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSourceSpec]:
     preferred = preferred or _live_camera_preferred_source()
     specs: list[_CameraSourceSpec] = []
@@ -1179,6 +1237,21 @@ def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSo
         ))
 
     specs.extend(_kinect_source_specs(preferred))
+
+    # Tapo as a first-class source whenever credentials are configured.
+    try:
+        from tapo_control import tapo_configured, tapo_settings, tapo_rtsp_url
+        if tapo_configured():
+            s = tapo_settings()
+            specs.append(_CameraSourceSpec(
+                id="tapo",
+                label=s.get("label") or "Tapo Camera",
+                kind="tapo",
+                detail=f"{s['host']} ({s['stream']})",
+                url=tapo_rtsp_url(s),
+            ))
+    except Exception:
+        pass
 
     for idx, item in enumerate(_configured_ip_sources(), start=1):
         url = str(item["url"])
@@ -1290,12 +1363,14 @@ def _build_ip_onvif_controller(stream_url: str) -> OnvifNightVisionController | 
 
 def _configured_ip_sources(include_primary: bool | None = None) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
+    # The primary IP detection camera is also surfaced here so the live page
+    # has one tile per configured IP camera regardless of detection state.
     if include_primary is None:
-        include_primary = _live_camera_preferred_source() != "ip"
+        include_primary = True
 
     primary = _normalize_camera_url(_live_setting("ip_camera_url", config.IP_CAMERA_URL))
     if include_primary and _is_supported_camera_url(primary):
-        entries.append({"label": "Primary IP Camera", "url": primary, "options": {}})
+        entries.append({"label": "IP Camera", "url": primary, "options": {}})
 
     raw = _live_setting("ip_camera_urls", config.IP_CAMERA_URLS)
     for chunk in raw.replace(",", "\n").splitlines():

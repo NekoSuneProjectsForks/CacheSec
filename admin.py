@@ -126,6 +126,49 @@ def live_stream(source_id: str = "primary"):
 
 
 # ---------------------------------------------------------------------------
+# go2rtc reverse proxy — exposes go2rtc's HTTP API (including the streaming
+# /api/stream.mp4 fMP4 endpoint) under the same origin so a browser only
+# talks to CacheSec / Cloudflare. WebSockets are not proxied here; for
+# WebSocket-based MSE, point Cloudflare Tunnel at go2rtc:1984 directly.
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/go2rtc/<path:subpath>")
+@operator_required
+def go2rtc_proxy(subpath: str):
+    import os, urllib.request, urllib.error
+    from urllib.parse import urlencode
+    host = os.environ.get("GO2RTC_HOST", "go2rtc")
+    port = os.environ.get("GO2RTC_HTTP_PORT", "1984")
+    qs = urlencode(request.args.to_dict(flat=False), doseq=True)
+    url = f"http://{host}:{port}/{subpath}"
+    if qs:
+        url = f"{url}?{qs}"
+    try:
+        upstream = urllib.request.urlopen(url, timeout=30)
+    except (urllib.error.URLError, OSError) as exc:
+        return Response(f"go2rtc unavailable: {exc}", status=502)
+
+    def stream():
+        try:
+            while True:
+                chunk = upstream.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            upstream.close()
+
+    headers = {}
+    ct = upstream.headers.get("Content-Type")
+    if ct:
+        headers["Content-Type"] = ct
+    cl = upstream.headers.get("Content-Length")
+    if cl:
+        headers["Content-Length"] = cl
+    return Response(stream(), status=upstream.status, headers=headers)
+
+
+# ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
 
@@ -918,10 +961,18 @@ def api_status():
     unkn = models.count_events_today(db, "unknown")
     recg = models.count_events_today(db, "recognized")
 
+    # Streaming-camera count (independent of detection state) — used by the
+    # topbar badge so "Live" reflects whether the user has any feed at all.
+    from camera import get_live_sources
+    live_sources = get_live_sources()
+    detection_count = sum(1 for s in live_sources if s.get("detection"))
+
     return jsonify({
         "camera_running":      cam.get("running", False),
         "camera_error":        cam.get("error", ""),
         "camera_source":       cam.get("source", "webcam"),
+        "live_camera_count":   len(live_sources),
+        "detection_camera_count": detection_count,
         "night_vision":        cam.get("night_vision", False),
         "sls_enabled":         cam.get("sls_enabled", False),
         "sls_active":          cam.get("sls_active", False),

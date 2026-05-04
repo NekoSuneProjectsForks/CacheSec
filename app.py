@@ -195,6 +195,12 @@ def create_app() -> Flask:
 def _bootstrap() -> None:
     """Run once at startup: init DB and (if setup is done) start camera."""
     init_db()
+    try:
+        from go2rtc_config import regenerate_config, reload_go2rtc
+        regenerate_config()
+        reload_go2rtc()
+    except Exception as exc:
+        logger.warning("go2rtc config regeneration failed (non-fatal): %s", exc)
     if setup_complete():
         _start_camera()
     else:

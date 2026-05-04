@@ -99,6 +99,12 @@ def _load_cams() -> list[dict]:
 
 def _save_cams(cams: list[dict]) -> None:
     set_setting("setup_cameras", json.dumps(cams), user_id=session.get("user_id"))
+    try:
+        from go2rtc_config import regenerate_config, reload_go2rtc
+        regenerate_config()
+        reload_go2rtc()
+    except Exception as exc:
+        logger.debug("go2rtc regen after camera save failed: %s", exc)
 
 
 def _cam_describe(cam: dict) -> str:
