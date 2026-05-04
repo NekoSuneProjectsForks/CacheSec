@@ -73,7 +73,19 @@ def _wizard_state() -> str:
 def wizard():
     if setup_complete():
         return redirect(url_for("admin.dashboard"))
-    return render_template("setup/wizard.html", step=_wizard_state())
+    state = _wizard_state()
+    # Self-heal: if every step's data is present but the completion flag
+    # somehow never landed, set it now and let the user through. Avoids the
+    # "Setup complete — redirecting…" deadlock.
+    if state == "done":
+        set_setting("setup_complete", "true", user_id=session.get("user_id"))
+        try:
+            from camera import get_camera_loop
+            get_camera_loop().start()
+        except Exception as exc:
+            logger.warning("Camera loop start after setup recovery failed: %s", exc)
+        return redirect(url_for("admin.dashboard"))
+    return render_template("setup/wizard.html", step=state)
 
 
 @setup_bp.route("/admin", methods=["POST"])
@@ -140,18 +152,20 @@ def submit_camera():
         cam_type = "webcam"
 
     uid = session.get("user_id")
-    set_setting("camera_preferred_source", cam_type, user_id=uid)
 
+    # Validate type-specific fields BEFORE persisting anything, so a missing
+    # Tapo password doesn't leave the DB in a half-configured state.
+    pending: list[tuple[str, str]] = []
     if cam_type == "ip":
         url = (request.form.get("ip_camera_url") or "").strip()
         if not url:
             flash("IP camera URL is required.", "danger")
             return redirect(url_for("setup.wizard"))
-        set_setting("ip_camera_url", url, user_id=uid)
         transport = (request.form.get("ip_camera_rtsp_transport") or "tcp").strip().lower()
         if transport not in {"tcp", "udp", "udp_multicast", "http"}:
             transport = "tcp"
-        set_setting("ip_camera_rtsp_transport", transport, user_id=uid)
+        pending.append(("ip_camera_url", url))
+        pending.append(("ip_camera_rtsp_transport", transport))
     elif cam_type == "tapo":
         host = (request.form.get("tapo_host") or "").strip()
         username = (request.form.get("tapo_username") or "admin").strip() or "admin"
@@ -162,10 +176,15 @@ def submit_camera():
         if not host or not password:
             flash("Tapo host and password are required.", "danger")
             return redirect(url_for("setup.wizard"))
-        set_setting("tapo_host", host, user_id=uid)
-        set_setting("tapo_username", username, user_id=uid)
-        set_setting("tapo_password", password, user_id=uid)
-        set_setting("tapo_stream", stream, user_id=uid)
+        pending.append(("tapo_host", host))
+        pending.append(("tapo_username", username))
+        pending.append(("tapo_password", password))
+        pending.append(("tapo_stream", stream))
+
+    # All validation passed — write source + type-specific keys.
+    set_setting("camera_preferred_source", cam_type, user_id=uid)
+    for key, value in pending:
+        set_setting(key, value, user_id=uid)
 
     audit("SETUP_CAMERA_CONFIGURED", user_id=uid,
           username=session.get("username", ""),
