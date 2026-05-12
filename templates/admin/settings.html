@@ -6,7 +6,7 @@
 <div class="row justify-content-center">
   <div class="col-lg-8">
     <div class="card cs-card">
-      <div class="card-header cs-card-header">Detection &amp; Recognition</div>
+      <div class="card-header cs-card-header">Settings Tabs (Primary-first camera setup)</div>
       <form method="POST">
         <div class="card-body row g-3">
 
@@ -34,7 +34,7 @@
           {% set source_labels = {
             'webcam': 'USB / Pi Camera',
             'ip':     'IP Camera / RTSP',
-            'kinect': 'Kinect',
+            'kinect': 'Kinect (v1 / Xbox One experimental)',
             'tapo':   'TP-Link Tapo',
           } %}
           <input type="hidden" name="camera_preferred_source" id="camera_preferred_source" value="{{ source }}">
@@ -62,7 +62,7 @@
                     {% if source == 'ip' %}{{ settings.ip_camera_url or 'Not configured' }}
                     {% elif source == 'tapo' %}{{ settings.tapo_host or 'Not configured' }}
                     {% elif source == 'webcam' %}USB / Pi Camera (auto-detected)
-                    {% elif source == 'kinect' %}Kinect v1 (USB)
+                    {% elif source == 'kinect' %}Kinect v1 (USB) / Xbox One fallback
                     {% endif %}
                   </div>
                 </div>
@@ -97,7 +97,7 @@
                      name="multi_camera_detection_enabled" value="true"
                      {{ 'checked' if settings.multi_camera_detection_enabled != 'false' else '' }}>
               <label class="form-check-label" for="multi_camera_detection_enabled">
-                Run detection on extra USB, Kinect, and IP cameras
+                Run detection on all configured cameras (primary + extra USB/IP/Kinect)
               </label>
             </div>
           </div>
@@ -449,7 +449,7 @@
             <input type="radio" class="btn-check" name="cam_type" id="cam-type-ip" value="ip" autocomplete="off">
             <label class="btn btn-outline-light" for="cam-type-ip"><i class="bi bi-router me-1"></i>IP / RTSP</label>
             <input type="radio" class="btn-check" name="cam_type" id="cam-type-kinect" value="kinect" autocomplete="off">
-            <label class="btn btn-outline-light" for="cam-type-kinect"><i class="bi bi-badge-3d me-1"></i>Kinect</label>
+            <label class="btn btn-outline-light" for="cam-type-kinect"><i class="bi bi-badge-3d me-1"></i>Kinect (v1/One)</label>
             <input type="radio" class="btn-check" name="cam_type" id="cam-type-tapo" value="tapo" autocomplete="off">
             <label class="btn btn-outline-light" for="cam-type-tapo"><i class="bi bi-camera-reels me-1"></i>Tapo</label>
           </div>
