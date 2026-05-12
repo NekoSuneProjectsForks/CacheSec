@@ -590,7 +590,11 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
       const looksLikeUrl = (s) => /^[a-z]+:\/\//i.test(s) || /^[\w.-]+\.[\w.-]+/.test(s);
       let mainEnd = parts.length;
       for (let i = 0; i < parts.length; i++) {
-        if (parts[i].includes('=')) { mainEnd = i; break; }
+        const token = parts[i];
+        const isUrlToken = /^[a-z]+:\/\//i.test(token) || /^[\w.-]+\.[\w.-]+/.test(token);
+        // URLs often include querystring "="; only split options on non-URL
+        // key=value segments.
+        if (token.includes('=') && !isUrlToken) { mainEnd = i; break; }
       }
       const main = parts.slice(0, mainEnd);
       const optParts = parts.slice(mainEnd);

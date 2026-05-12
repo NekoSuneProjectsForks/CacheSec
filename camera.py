@@ -1451,7 +1451,10 @@ def _parse_camera_source_entry(item: str, index: int) -> dict[str, object] | Non
 
     options_start = len(parts)
     for idx, part in enumerate(parts):
-        if "=" in part:
+        candidate = _normalize_camera_url(part)
+        # URL query strings contain "=" frequently; only treat as an option
+        # segment when the token is not itself a supported URL.
+        if "=" in part and not _is_supported_camera_url(candidate):
             options_start = idx
             break
     main_parts = parts[:options_start]
