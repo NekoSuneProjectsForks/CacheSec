@@ -255,6 +255,7 @@
   };
   let activeSourceId = sourceButtons.length ? sourceButtons[0].dataset.sourceId : 'primary';
   const initialSourceCount = sourceButtons.length;
+  const initialSourceKey = sourceButtons.map((b) => b.dataset.sourceId).join('|');
 
   sourceButtons.forEach((button) => {
     button.addEventListener('click', () => {
@@ -359,7 +360,8 @@
     fetch('/admin/api/sensors')
       .then(r => r.json())
       .then((s) => {
-        if ((s.live_source_count || 0) !== initialSourceCount) {
+        const sourceKey = (s.live_sources || []).map((x) => x.id || '').join('|');
+        if ((s.live_source_count || 0) !== initialSourceCount || sourceKey !== initialSourceKey) {
           window.location.reload();
           return;
         }

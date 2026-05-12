@@ -579,7 +579,7 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
 
   function parseExtras(raw) {
     const out = [];
-    raw.replace(/,/g, '\n').split('\n').forEach((line) => {
+    raw.split('\n').forEach((line) => {
       const item = line.trim();
       if (!item || item.startsWith('#')) return;
       const parts = item.split('|').map(s => s.trim()).filter(Boolean);

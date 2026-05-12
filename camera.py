@@ -1434,7 +1434,7 @@ def _configured_ip_sources(include_primary: bool | None = None) -> list[dict[str
         entries.append({"label": "IP Camera", "url": primary, "options": {}})
 
     raw = _live_setting("ip_camera_urls", config.IP_CAMERA_URLS)
-    for chunk in raw.replace(",", "\n").splitlines():
+    for chunk in raw.splitlines():
         item = chunk.strip()
         if not item or item.startswith("#"):
             continue
