@@ -126,6 +126,7 @@ nano .env
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL |
 | `DISCORD_MENTION_EVERYONE` | Set `true` to include `@everyone` in unknown Discord alerts; defaults to `false` |
 | `CAMERA_PREFERRED_SOURCE` | Use `webcam`, `kinect`, `ip`, or `tapo` |
+| `KINECT_ONE_CAMERA_INDEX` | Optional experimental Xbox One Kinect RGB V4L2 index fallback (e.g. `2`) when `CAMERA_PREFERRED_SOURCE=kinect` and Kinect v1 is unavailable |
 | `USB_CAMERA_AUTO_DISCOVER` | Automatically discover `/dev/video*` cameras for grid and detection |
 | `USB_CAMERA_INDICES` | Optional comma-separated extra USB/V4L2 indices to show and detect on |
 | `MULTI_CAMERA_DETECTION_ENABLED` | Set `true` to run detection on auxiliary USB, Kinect, and IP feeds |
@@ -236,6 +237,51 @@ The repository now includes:
 - `Dockerfile` â€” production image with Gunicorn, ffmpeg, and OpenCV runtime libs
 - `docker-compose.yml` â€” local container deployment with persistent `/data` storage
 - `.github/workflows/container.yml` â€” GitHub Actions workflow that builds and publishes a multi-arch image to GHCR
+
+### Recommended image variants
+
+Use separate tags so deployments stay simple and predictable:
+
+- `cachesec:cpu` — CPU-only runtime.
+- `cachesec:cuda11` — NVIDIA CUDA 11 compatible runtime.
+- `cachesec:cuda12` — NVIDIA CUDA 12 compatible runtime.
+- `cachesec:kinect` — Kinect-focused image (includes OpenKinect/freenect stack).
+- `cachesec:pi` — Raspberry Pi image target (Pi 4 + Pi 5).
+
+You can build them from the same Dockerfile by changing build args/environment:
+
+```bash
+# CPU only
+docker build -t cachesec:cpu --build-arg INSTALL_KINECT=false --build-arg INSTALL_DETECTRON2=false .
+
+# CUDA 11 example
+docker build -t cachesec:cuda11 \
+  --build-arg INSTALL_KINECT=false \
+  --build-arg INSTALL_DETECTRON2=true \
+  --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118 .
+
+# CUDA 12 example
+docker build -t cachesec:cuda12 \
+  --build-arg INSTALL_KINECT=false \
+  --build-arg INSTALL_DETECTRON2=true \
+  --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 .
+
+# Kinect-enabled image
+docker build -t cachesec:kinect --build-arg INSTALL_KINECT=true .
+```
+
+For Raspberry Pi builds, publish `linux/arm64` images as `cachesec:pi` and keep
+`INSTALL_KINECT` disabled unless you are explicitly wiring Kinect hardware.
+
+GitHub Actions (`.github/workflows/container.yml`) now publishes separated tags
+for:
+
+- `cpu` (default multi-arch runtime)
+- `pi` (arm64 target for Pi 4/Pi 5)
+- `kinect` (OpenKinect stack enabled)
+- `detectron2` / `detectron2-cpu`
+- `cuda11` / `detectron2-cuda11`
+- `cuda12` / `detectron2-cuda12`
 
 ### Local Docker Compose
 
@@ -396,6 +442,16 @@ It builds these image variants:
 - `:main`, `:latest`, and version tags: default smaller build without Kinect
   packages (`INSTALL_KINECT=false`)
 - `:kinect`: Kinect-enabled build (`INSTALL_KINECT=true`)
+
+### Xbox One Kinect (experimental fallback)
+
+CacheSec now includes an **experimental** Xbox One Kinect fallback path for RGB
+video only. If Kinect v1 cannot start and `CAMERA_PREFERRED_SOURCE=kinect`,
+the app will try `KINECT_ONE_CAMERA_INDEX` as a direct V4L2 camera source.
+
+- No tilt/motor controls in this mode
+- No Kinect v1-style IR/depth/SLS path in this mode
+- Intended for community testing when Xbox One Kinect adapters/drivers are present
 - `:detectron2`: Detectron2 CPU object-detection build without Kinect
 
 It runs on pushes to `main`/`master`, version tags like `v1.0.0`, and manual
