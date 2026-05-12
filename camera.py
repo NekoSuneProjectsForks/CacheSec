@@ -831,6 +831,30 @@ class CameraLoop:
                                kinect.error)
                 return False
 
+        def start_kinect_one_source() -> CaptureHandle | None:
+            """Experimental fallback for Xbox One Kinect RGB via V4L2 index."""
+            raw_index = os.environ.get("KINECT_ONE_CAMERA_INDEX", "-1").strip()
+            try:
+                index = int(raw_index)
+            except ValueError:
+                index = -1
+            if index < 0:
+                return None
+            cap2 = cv2.VideoCapture(index)
+            if not cap2.isOpened():
+                cap2.release()
+                logger.warning("Kinect One index %s not available", index)
+                return None
+            cap2.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+            cap2.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+            cap2.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            _camera_status["source"] = "kinect_one"
+            _camera_status["night_vision"] = False
+            _camera_status["sls_active"] = False
+            _camera_status["depth"] = False
+            logger.info("Using experimental Kinect One RGB source at /dev/video%s", index)
+            return cap2
+
         def switch_to_kinect_night(gray_mean: float) -> bool:
             global _night_vision_active
             if not config.KINECT_NIGHT_VISION_ENABLED or _night_vision_forced_off():
@@ -892,10 +916,12 @@ class CameraLoop:
         elif preferred_source == "kinect":
             use_kinect = start_kinect_source()
             if not use_kinect:
-                logger.error("Kinect requested but unavailable; not falling back.")
-                _camera_status["running"] = False
-                recorder.stop_background()
-                return
+                cap = start_kinect_one_source()
+                if cap is None:
+                    logger.error("Kinect requested but unavailable; Kinect One fallback unavailable too.")
+                    _camera_status["running"] = False
+                    recorder.stop_background()
+                    return
 
         if cap is None and not use_kinect:
             _camera_status["running"] = False
