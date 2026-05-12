@@ -566,6 +566,16 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
   const extraInput = document.getElementById('ip_camera_urls');
   const listEl = document.getElementById('extra-cameras-list');
   let extras = parseExtras(extraInput.value || '');
+  const primarySourceInput = document.getElementById('camera_preferred_source');
+  const primaryIpInput = document.getElementById('ip_camera_url');
+  if ((primarySourceInput.value || '') !== 'ip' && (primaryIpInput.value || '').trim()) {
+    extras.unshift({
+      label: 'IP Camera (from setup)',
+      url: primaryIpInput.value.trim(),
+      options: {},
+      _fromPrimaryIp: true,
+    });
+  }
 
   function parseExtras(raw) {
     const out = [];
@@ -606,13 +616,14 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
   function serializeExtras(items) {
     return items.map((it) => {
       const parts = [];
+      if (it._fromPrimaryIp) return '';
       if (it.label) parts.push(it.label);
       parts.push(it.url);
       ['referer', 'origin', 'user_agent'].forEach((k) => {
         if (it.options && it.options[k]) parts.push(`${k}=${it.options[k]}`);
       });
       return parts.join('|');
-    }).join('\n');
+    }).filter(Boolean).join('\n');
   }
 
   function renderExtras() {
@@ -634,7 +645,7 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
           <button type="button" class="btn btn-outline-success cam-primary" data-idx="${idx}" title="Use as primary detection camera">
             <i class="bi bi-star"></i>
           </button>
-          <button type="button" class="btn btn-outline-light cam-edit" data-idx="${idx}">
+          <button type="button" class="btn btn-outline-light cam-edit" data-idx="${idx}" ${it._fromPrimaryIp ? '' : ''}>
             <i class="bi bi-pencil"></i>
           </button>
           <button type="button" class="btn btn-outline-danger cam-remove" data-idx="${idx}">
@@ -798,6 +809,9 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
       if (oldPrimaryType === 'ip' && oldPrimaryIp && oldPrimaryIp !== it.url) {
         extras.unshift({ label: 'Previous Primary', url: oldPrimaryIp, options: {} });
       }
+      if (it._fromPrimaryIp) {
+        primaryIpInput.value = oldPrimaryIp;
+      }
       renderExtras();
       return;
     }
@@ -814,6 +828,9 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
     } else if (removeBtn) {
       const idx = parseInt(removeBtn.dataset.idx, 10);
       if (idx >= 0) {
+        if (extras[idx] && extras[idx]._fromPrimaryIp) {
+          primaryIpInput.value = '';
+        }
         extras.splice(idx, 1);
         renderExtras();
       }
