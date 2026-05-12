@@ -1281,14 +1281,49 @@ def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSo
 
     for idx, item in enumerate(_configured_ip_sources(), start=1):
         url = str(item["url"])
-        specs.append(_CameraSourceSpec(
-            id=f"ip{idx}",
-            label=str(item["label"]),
-            kind="ip",
-            detail=_display_source_url(url),
-            url=url,
-            options=dict(item.get("options") or {}),
-        ))
+        scheme = urlsplit(url).scheme.lower()
+        if scheme == "usb":
+            try:
+                usb_index = int((urlsplit(url).netloc or "0").strip() or "0")
+            except ValueError:
+                usb_index = 0
+            specs.append(_CameraSourceSpec(
+                id=f"webcam{usb_index}",
+                label=str(item["label"] or f"USB / Pi Camera {usb_index}"),
+                kind="webcam",
+                detail=f"index {usb_index}",
+                index=usb_index,
+            ))
+        elif scheme == "kinect":
+            specs.append(_CameraSourceSpec(
+                id="kinect",
+                label=str(item["label"] or "Kinect"),
+                kind="kinect",
+                detail="RGB/IR (hardware)",
+                index=0,
+            ))
+        elif scheme == "tapo":
+            try:
+                from tapo_control import tapo_settings, tapo_rtsp_url
+                s = tapo_settings()
+                specs.append(_CameraSourceSpec(
+                    id="tapo",
+                    label=str(item["label"] or s.get("label") or "Tapo Camera"),
+                    kind="tapo",
+                    detail=f"{s['host']} ({s['stream']})",
+                    url=tapo_rtsp_url(s),
+                ))
+            except Exception:
+                continue
+        else:
+            specs.append(_CameraSourceSpec(
+                id=f"ip{idx}",
+                label=str(item["label"]),
+                kind="ip",
+                detail=_display_source_url(url),
+                url=url,
+                options=dict(item.get("options") or {}),
+            ))
     return specs
 
 
@@ -1461,7 +1496,7 @@ def _normalize_camera_url(raw: str) -> str:
 
 def _is_supported_camera_url(url: str) -> bool:
     scheme = urlsplit(url).scheme.lower()
-    return scheme in {"rtsp", "rtsps", "http", "https"}
+    return scheme in {"rtsp", "rtsps", "http", "https", "usb", "kinect", "tapo"}
 
 
 def _set_ffmpeg_capture_options(url: str, transport: str | None = None) -> None:

@@ -700,8 +700,8 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
       ? 'Change Primary Camera'
       : (editIdx >= 0 ? 'Edit Live-Only Camera' : 'Add Live-Only Camera');
 
-    // Limit type choices: extras only support ip
-    const onlyIp = mode === 'extra';
+    // Extras can now be IP, USB/Pi, Kinect, or Tapo entries.
+    const onlyIp = false;
     typeRadios.forEach((r) => {
       const lbl = modal.querySelector(`label[for="${r.id}"]`);
       const allowed = !onlyIp || r.value === 'ip';
@@ -771,17 +771,31 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
       document.getElementById('primary-camera-detail').textContent = detail;
       document.getElementById('primary-camera-kind').textContent = type;
     } else {
-      const url = modal.querySelector('#cam-ip-url').value.trim();
-      if (!url) { alert('Stream URL is required.'); return; }
-      const item = {
-        label: modal.querySelector('#cam-ip-name').value.trim(),
-        url,
-        options: {},
-      };
-      const ref = modal.querySelector('#cam-ip-referer').value.trim();
-      const org = modal.querySelector('#cam-ip-origin').value.trim();
-      if (ref) item.options.referer = ref;
-      if (org) item.options.origin = org;
+      let item = null;
+      if (type === 'ip') {
+        const url = modal.querySelector('#cam-ip-url').value.trim();
+        if (!url) { alert('Stream URL is required.'); return; }
+        item = {
+          label: modal.querySelector('#cam-ip-name').value.trim(),
+          url,
+          options: {},
+        };
+        const ref = modal.querySelector('#cam-ip-referer').value.trim();
+        const org = modal.querySelector('#cam-ip-origin').value.trim();
+        if (ref) item.options.referer = ref;
+        if (org) item.options.origin = org;
+      } else if (type === 'webcam') {
+        const idxRaw = prompt('USB/Pi camera index for extra feed (example: 0,1,2):', '0');
+        if (idxRaw === null) return;
+        const idx = parseInt(String(idxRaw).trim(), 10);
+        if (Number.isNaN(idx) || idx < 0) { alert('Invalid camera index.'); return; }
+        item = { label: `USB / Pi Camera ${idx}`, url: `usb://${idx}`, options: {} };
+      } else if (type === 'kinect') {
+        item = { label: 'Kinect', url: 'kinect://0', options: {} };
+      } else if (type === 'tapo') {
+        item = { label: 'Tapo Camera', url: 'tapo://default', options: {} };
+      }
+      if (!item) return;
       const idx = parseInt(camEditIndex.value, 10);
       if (idx >= 0 && extras[idx]) extras[idx] = item;
       else extras.push(item);
