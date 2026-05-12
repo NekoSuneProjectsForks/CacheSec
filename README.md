@@ -283,6 +283,9 @@ for:
 - `cuda11` / `detectron2-cuda11`
 - `cuda12` / `detectron2-cuda12`
 
+`detectron2-cpu` is published for both `linux/amd64` and `linux/arm64` so Pi/ARM64
+hosts can pull it directly when wheels are available for the dependency stack.
+
 ### Local Docker Compose
 
 1. Copy `.env.example` to `.env`
