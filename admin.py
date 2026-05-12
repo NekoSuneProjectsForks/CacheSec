@@ -125,6 +125,49 @@ def live_stream(source_id: str = "primary"):
     )
 
 
+@admin_bp.route("/api/camera/control", methods=["POST"])
+@operator_required
+def api_camera_control():
+    action = (request.json or {}).get("action", "").strip().lower()
+    source_id = (request.json or {}).get("source_id", "primary").strip().lower()
+    if action not in {"up", "down", "left", "right", "stop"}:
+        return jsonify({"ok": False, "error": "Unsupported action"}), 400
+
+    if source_id in {"", "primary"}:
+        from camera import get_camera_status
+        source = (get_camera_status().get("source") or "").lower()
+    elif source_id == "kinect":
+        source = "kinect"
+    elif source_id.startswith("kinect"):
+        source = "kinect"
+    elif source_id.startswith("tapo"):
+        source = "tapo"
+    elif source_id.startswith("ip"):
+        source = "ip"
+    else:
+        source = "unknown"
+
+    if source == "kinect":
+        from kinect import get_kinect
+        index = 0
+        if source_id.startswith("kinect") and source_id != "kinect":
+            try:
+                index = max(0, int(source_id.replace("kinect", "")) - 1)
+            except ValueError:
+                index = 0
+        ks = get_kinect(index)
+        if action == "up":
+            ks.set_tilt((ks.get_tilt_angle() or 0.0) + 5.0)
+        elif action == "down":
+            ks.set_tilt((ks.get_tilt_angle() or 0.0) - 5.0)
+        return jsonify({"ok": True, "source": source, "source_id": source_id, "action": action})
+
+    return jsonify({
+        "ok": False,
+        "error": f"Source '{source_id}' ({source}) does not expose move controls in CacheSec yet.",
+    }), 400
+
+
 # ---------------------------------------------------------------------------
 # go2rtc reverse proxy — exposes go2rtc's HTTP API (including the streaming
 # /api/stream.mp4 fMP4 endpoint) under the same origin so a browser only

@@ -831,6 +831,30 @@ class CameraLoop:
                                kinect.error)
                 return False
 
+        def start_kinect_one_source() -> CaptureHandle | None:
+            """Experimental fallback for Xbox One Kinect RGB via V4L2 index."""
+            raw_index = os.environ.get("KINECT_ONE_CAMERA_INDEX", "-1").strip()
+            try:
+                index = int(raw_index)
+            except ValueError:
+                index = -1
+            if index < 0:
+                return None
+            cap2 = cv2.VideoCapture(index)
+            if not cap2.isOpened():
+                cap2.release()
+                logger.warning("Kinect One index %s not available", index)
+                return None
+            cap2.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+            cap2.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+            cap2.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            _camera_status["source"] = "kinect_one"
+            _camera_status["night_vision"] = False
+            _camera_status["sls_active"] = False
+            _camera_status["depth"] = False
+            logger.info("Using experimental Kinect One RGB source at /dev/video%s", index)
+            return cap2
+
         def switch_to_kinect_night(gray_mean: float) -> bool:
             global _night_vision_active
             if not config.KINECT_NIGHT_VISION_ENABLED or _night_vision_forced_off():
@@ -892,10 +916,12 @@ class CameraLoop:
         elif preferred_source == "kinect":
             use_kinect = start_kinect_source()
             if not use_kinect:
-                logger.error("Kinect requested but unavailable; not falling back.")
-                _camera_status["running"] = False
-                recorder.stop_background()
-                return
+                cap = start_kinect_one_source()
+                if cap is None:
+                    logger.error("Kinect requested but unavailable; Kinect One fallback unavailable too.")
+                    _camera_status["running"] = False
+                    recorder.stop_background()
+                    return
 
         if cap is None and not use_kinect:
             _camera_status["running"] = False
@@ -1255,14 +1281,49 @@ def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSo
 
     for idx, item in enumerate(_configured_ip_sources(), start=1):
         url = str(item["url"])
-        specs.append(_CameraSourceSpec(
-            id=f"ip{idx}",
-            label=str(item["label"]),
-            kind="ip",
-            detail=_display_source_url(url),
-            url=url,
-            options=dict(item.get("options") or {}),
-        ))
+        scheme = urlsplit(url).scheme.lower()
+        if scheme == "usb":
+            try:
+                usb_index = int((urlsplit(url).netloc or "0").strip() or "0")
+            except ValueError:
+                usb_index = 0
+            specs.append(_CameraSourceSpec(
+                id=f"webcam{usb_index}",
+                label=str(item["label"] or f"USB / Pi Camera {usb_index}"),
+                kind="webcam",
+                detail=f"index {usb_index}",
+                index=usb_index,
+            ))
+        elif scheme == "kinect":
+            specs.append(_CameraSourceSpec(
+                id="kinect",
+                label=str(item["label"] or "Kinect"),
+                kind="kinect",
+                detail="RGB/IR (hardware)",
+                index=0,
+            ))
+        elif scheme == "tapo":
+            try:
+                from tapo_control import tapo_settings, tapo_rtsp_url
+                s = tapo_settings()
+                specs.append(_CameraSourceSpec(
+                    id="tapo",
+                    label=str(item["label"] or s.get("label") or "Tapo Camera"),
+                    kind="tapo",
+                    detail=f"{s['host']} ({s['stream']})",
+                    url=tapo_rtsp_url(s),
+                ))
+            except Exception:
+                continue
+        else:
+            specs.append(_CameraSourceSpec(
+                id=f"ip{idx}",
+                label=str(item["label"]),
+                kind="ip",
+                detail=_display_source_url(url),
+                url=url,
+                options=dict(item.get("options") or {}),
+            ))
     return specs
 
 
@@ -1373,7 +1434,7 @@ def _configured_ip_sources(include_primary: bool | None = None) -> list[dict[str
         entries.append({"label": "IP Camera", "url": primary, "options": {}})
 
     raw = _live_setting("ip_camera_urls", config.IP_CAMERA_URLS)
-    for chunk in raw.replace(",", "\n").splitlines():
+    for chunk in raw.splitlines():
         item = chunk.strip()
         if not item or item.startswith("#"):
             continue
@@ -1435,7 +1496,7 @@ def _normalize_camera_url(raw: str) -> str:
 
 def _is_supported_camera_url(url: str) -> bool:
     scheme = urlsplit(url).scheme.lower()
-    return scheme in {"rtsp", "rtsps", "http", "https"}
+    return scheme in {"rtsp", "rtsps", "http", "https", "usb", "kinect", "tapo"}
 
 
 def _set_ffmpeg_capture_options(url: str, transport: str | None = None) -> None:
