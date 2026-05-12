@@ -7,7 +7,7 @@
 <div class="row justify-content-center">
   <div class="col-lg-10">
     {% if sources %}
-    <div class="card cs-card" id="focus-view-card">
+    <div class="card cs-card d-none" id="focus-view-card">
       <div class="card-header cs-card-header d-flex flex-column flex-lg-row justify-content-between gap-3">
         <div>
           <button type="button" id="back-to-grid" class="btn btn-sm btn-outline-light mb-2 d-none">
@@ -76,7 +76,7 @@
         USB / Kinect feeds use MJPEG.
       </div>
     </div>
-    <div class="card cs-card mt-3">
+    <div class="card cs-card mt-3 d-none" id="camera-controls-card">
       <div class="card-header cs-card-header"><i class="bi bi-arrows-move me-1"></i>Primary Camera Move Controls</div>
       <div class="card-body d-flex flex-wrap gap-2 align-items-center">
         <button class="btn btn-outline-light btn-sm cam-move-btn" data-action="up">Up</button>
@@ -110,12 +110,17 @@
         <div>
           <i class="bi bi-grid-3x3-gap-fill me-2"></i>All Cameras
         </div>
-        <span class="badge bg-success blink-dot"><i class="bi bi-circle-fill me-1"></i>LIVE</span>
+        <div class="d-flex align-items-center gap-2">
+          <button type="button" class="btn btn-sm btn-outline-light d-none" id="grid-back-btn">
+            <i class="bi bi-arrow-left me-1"></i>Show all
+          </button>
+          <span class="badge bg-success blink-dot"><i class="bi bi-circle-fill me-1"></i>LIVE</span>
+        </div>
       </div>
       <div class="card-body">
         <div class="row g-3">
           {% for source in sources %}
-          <div class="col-12 col-md-6 col-xl-4">
+          <div class="col-12 col-md-6 col-xl-4 live-grid-col">
             <div class="small text-muted mb-2 text-truncate">
               {{ source.label }}
               {% if source.detection %}<span class="badge bg-danger ms-1">Detection</span>{% endif %}
@@ -183,6 +188,8 @@
   const audioIcon = document.getElementById('audio-icon');
   const audioLabel = document.getElementById('audio-label');
   const moveStatus = document.getElementById('cam-move-status');
+  const controlsCard = document.getElementById('camera-controls-card');
+  const gridBackBtn = document.getElementById('grid-back-btn');
   const focusCard = document.getElementById('focus-view-card');
   const backToGridBtn = document.getElementById('back-to-grid');
   const prevBtn = document.getElementById('prev-camera-btn');
@@ -272,16 +279,31 @@
       candidate.classList.toggle('btn-outline-light', candidate !== btn);
     });
     showSource(btn);
-    if (backToGridBtn && orderedSourceIds.length > 1) backToGridBtn.classList.remove('d-none');
-    if (focusCard) focusCard.classList.remove('d-none');
+    if (controlsCard) controlsCard.classList.remove('d-none');
     pollStatus();
   }
-  document.querySelectorAll('.live-grid-tile').forEach((tile) => {
+  const gridTiles = Array.from(document.querySelectorAll('.live-grid-tile'));
+  const gridCols = Array.from(document.querySelectorAll('.live-grid-col'));
+  gridTiles.forEach((tile) => {
     tile.style.cursor = 'pointer';
-    tile.addEventListener('click', () => openFocus(tile.dataset.sourceId));
+    tile.addEventListener('click', () => {
+      openFocus(tile.dataset.sourceId);
+      const col = tile.closest('.live-grid-col');
+      gridCols.forEach((c) => {
+        c.classList.toggle('d-none', c !== col);
+        c.classList.remove('col-md-6', 'col-xl-4');
+      });
+      if (col) col.classList.add('col-12');
+      if (gridBackBtn) gridBackBtn.classList.remove('d-none');
+    });
   });
-  if (backToGridBtn) backToGridBtn.addEventListener('click', () => {
-    if (focusCard && orderedSourceIds.length > 1) focusCard.classList.add('d-none');
+  if (gridBackBtn) gridBackBtn.addEventListener('click', () => {
+    gridCols.forEach((c) => {
+      c.classList.remove('d-none');
+      c.classList.add('col-md-6', 'col-xl-4');
+    });
+    gridBackBtn.classList.add('d-none');
+    if (controlsCard) controlsCard.classList.add('d-none');
   });
   if (prevBtn) prevBtn.addEventListener('click', () => {
     if (!orderedSourceIds.length) return;
@@ -312,7 +334,8 @@
 
   // Initial render — show the first source's feed.
   if (sourceButtons.length > 0) showSource(sourceButtons[0]);
-  if (focusCard && sourceButtons.length > 1) focusCard.classList.add('d-none');
+  if (focusCard) focusCard.classList.add('d-none');
+  if (controlsCard) controlsCard.classList.add('d-none');
 
   function pollStatus() {
     fetch('/admin/api/status')

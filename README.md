@@ -245,7 +245,8 @@ Use separate tags so deployments stay simple and predictable:
 - `cachesec:cpu` — CPU-only runtime.
 - `cachesec:cuda11` — NVIDIA CUDA 11 compatible runtime.
 - `cachesec:cuda12` — NVIDIA CUDA 12 compatible runtime.
-- `cachesec:kinect` — Kinect-focused image (includes OpenKinect/freenect stack).
+- `cachesec:kinect` / `cachesec:kinect1` — Kinect v1 / Xbox 360-focused image (OpenKinect/libfreenect stack).
+- `cachesec:kinect2` — Kinect v2 / Xbox One-focused image (libfreenect2 prerequisites + optional distro packages when available).
 - `cachesec:pi` — Raspberry Pi image target (Pi 4 + Pi 5).
 
 You can build them from the same Dockerfile by changing build args/environment:
@@ -266,8 +267,11 @@ docker build -t cachesec:cuda12 \
   --build-arg INSTALL_DETECTRON2=true \
   --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 .
 
-# Kinect-enabled image
-docker build -t cachesec:kinect --build-arg INSTALL_KINECT=true .
+# Kinect v1 / Xbox 360 image
+docker build -t cachesec:kinect1 --build-arg INSTALL_KINECT=true --build-arg INSTALL_KINECT2=false .
+
+# Kinect v2 / Xbox One image
+docker build -t cachesec:kinect2 --build-arg INSTALL_KINECT=false --build-arg INSTALL_KINECT2=true .
 ```
 
 For Raspberry Pi builds, publish `linux/arm64` images as `cachesec:pi` and keep
@@ -278,7 +282,8 @@ for:
 
 - `cpu` (default multi-arch runtime)
 - `pi` (arm64 target for Pi 4/Pi 5)
-- `kinect` (OpenKinect stack enabled)
+- `kinect` / `kinect1` (OpenKinect/libfreenect stack enabled)
+- `kinect2` (libfreenect2-oriented image)
 - `detectron2` / `detectron2-cpu`
 - `cuda11` / `detectron2-cuda11`
 - `cuda12` / `detectron2-cuda12`
