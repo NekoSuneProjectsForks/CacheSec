@@ -72,8 +72,8 @@
         </button>
       </div>
       <div class="card-footer text-muted small">
-        IP / Tapo cameras stream native H.264 via go2rtc (low-latency MSE).
-        USB / Kinect feeds use MJPEG.
+        RTSP IP / Tapo cameras can stream native H.264 via go2rtc.
+        HLS, snapshots, USB, and Kinect feeds use MJPEG fallback.
       </div>
     </div>
     <div class="card cs-card mt-3 d-none" id="camera-controls-card">
@@ -128,7 +128,7 @@
             <div class="bg-black rounded overflow-hidden text-center live-grid-tile" data-source-id="{{ source.id }}">
               {% if source.go2rtc_stream %}
               <video class="img-fluid live-grid-vid" autoplay muted playsinline
-                     src="{{ url_for('admin.go2rtc_proxy', subpath='api/stream.mp4') }}?src={{ source.go2rtc_stream }}"></video>
+                     src="{{ url_for('admin.go2rtc_proxy', subpath='api/stream.mp4') }}?src={{ source.go2rtc_stream|urlencode }}"></video>
               {% else %}
               <img src="{{ url_for('admin.live_stream', source_id=source.id) }}"
                    class="img-fluid live-grid-img"
@@ -280,32 +280,40 @@
       candidate.classList.toggle('btn-outline-light', candidate !== btn);
     });
     showSource(btn);
+    if (focusCard) focusCard.classList.remove('d-none');
+    if (backToGridBtn) backToGridBtn.classList.remove('d-none');
     if (controlsCard) controlsCard.classList.remove('d-none');
+    if (focusCard) focusCard.scrollIntoView({ block: 'start', behavior: 'smooth' });
     pollStatus();
   }
   const gridTiles = Array.from(document.querySelectorAll('.live-grid-tile'));
   const gridCols = Array.from(document.querySelectorAll('.live-grid-col'));
-  gridTiles.forEach((tile) => {
-    tile.style.cursor = 'pointer';
-    tile.addEventListener('click', () => {
-      openFocus(tile.dataset.sourceId);
-      const col = tile.closest('.live-grid-col');
-      gridCols.forEach((c) => {
-        c.classList.toggle('d-none', c !== col);
-        c.classList.remove('col-md-6', 'col-xl-4');
-      });
-      if (col) col.classList.add('col-12');
-      if (gridBackBtn) gridBackBtn.classList.remove('d-none');
-    });
-  });
-  if (gridBackBtn) gridBackBtn.addEventListener('click', () => {
+  function resetGridView() {
     gridCols.forEach((c) => {
       c.classList.remove('d-none');
       c.classList.add('col-md-6', 'col-xl-4');
     });
-    gridBackBtn.classList.add('d-none');
+    if (gridBackBtn) gridBackBtn.classList.add('d-none');
+  }
+  function closeFocus() {
+    resetGridView();
+    if (focusCard) focusCard.classList.add('d-none');
+    if (backToGridBtn) backToGridBtn.classList.add('d-none');
     if (controlsCard) controlsCard.classList.add('d-none');
+    video.pause();
+    video.removeAttribute('src');
+    image.removeAttribute('src');
+  }
+  gridTiles.forEach((tile) => {
+    tile.style.cursor = 'pointer';
+    tile.addEventListener('click', () => {
+      openFocus(tile.dataset.sourceId);
+    });
   });
+  if (gridBackBtn) gridBackBtn.addEventListener('click', () => {
+    closeFocus();
+  });
+  if (backToGridBtn) backToGridBtn.addEventListener('click', closeFocus);
   if (prevBtn) prevBtn.addEventListener('click', () => {
     if (!orderedSourceIds.length) return;
     const i = Math.max(0, orderedSourceIds.indexOf(activeSourceId));
@@ -333,8 +341,7 @@
     });
   });
 
-  // Initial render — show the first source's feed.
-  if (sourceButtons.length > 0) showSource(sourceButtons[0]);
+  // Focus view stays idle until a camera tile is selected.
   if (focusCard) focusCard.classList.add('d-none');
   if (controlsCard) controlsCard.classList.add('d-none');
 

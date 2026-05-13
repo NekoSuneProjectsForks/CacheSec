@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 import cv2
@@ -92,53 +92,62 @@ def get_camera_status() -> dict:
 
 
 def get_live_sources() -> list[dict]:
-    """One live source per camera the user added in the wizard.
+    """Return one live source for each configured camera.
 
-    For IP / Tapo cameras the source includes `go2rtc_stream`, the stream
-    name go2rtc serves the H.264 packets under. The browser pulls fMP4
-    from /admin/go2rtc/api/stream.mp4?src=<go2rtc_stream> for those.
-
-    USB / Kinect cameras don't use go2rtc; they render via MJPEG (the
-    existing /admin/live/stream/<id> endpoint).
+    The setup wizard stores the canonical camera list in `setup_cameras`,
+    while the Settings page still edits the older runtime keys
+    (`ip_camera_url`, `ip_camera_urls`, `tapo_*`, etc.). Merge both so Live
+    Feed does not disappear or keep stale titles after the user edits cameras
+    from Settings.
     """
-    import json
     sources: list[dict] = []
-    try:
-        raw = _live_setting("setup_cameras", "")
-        cams = json.loads(raw) if raw else []
-        if not isinstance(cams, list):
-            cams = []
-    except Exception:
-        cams = []
+    seen: set[tuple[str, str]] = set()
 
-    for cam in cams:
-        cam_id = cam.get("id", "")
-        cam_type = cam.get("type", "")
-        label = cam.get("label") or _wizard_cam_describe(cam)
+    def add(source: dict, key: tuple[str, str]) -> None:
+        if not key[1] or key in seen:
+            return
+        seen.add(key)
+        sources.append(source)
+
+    cams = _load_setup_cameras()
+    for ordinal, cam in enumerate(cams, start=1):
+        cam_id = str(cam.get("id") or "").strip()
+        cam_type = str(cam.get("type") or "").strip().lower()
+        source_id = f"cam_{cam_id}" if cam_id else f"setup_{ordinal}"
+        label = _wizard_cam_label(cam, ordinal)
         detail = _wizard_cam_describe(cam)
         if cam_type in {"ip", "tapo"}:
-            sources.append({
-                "id": f"cam_{cam_id}",
+            url = _setup_camera_stream_url(cam)
+            if not _is_supported_camera_url(url):
+                continue
+            # HLS/snapshot HTTP feeds are more reliable through CacheSec's
+            # ffmpeg-backed MJPEG path than go2rtc's fMP4 endpoint.
+            go2rtc_stream = ""
+            if cam_id and not (_looks_like_hls_url(url) or _looks_like_snapshot_url(url)):
+                go2rtc_stream = f"cam_{cam_id}"
+            add({
+                "id": source_id,
                 "label": label,
                 "kind": cam_type,
                 "active": False,
                 "detail": detail,
-                "go2rtc_stream": f"cam_{cam_id}",
+                "go2rtc_stream": go2rtc_stream,
                 "detection": bool(cam.get("detection")),
-            })
+            }, (cam_type, _normalize_camera_url(url)))
         elif cam_type == "webcam":
             idx = int(cam.get("index", 0))
-            sources.append({
-                "id": f"webcam{idx}" if idx != config.CAMERA_INDEX else "webcam",
+            primary_idx = _primary_camera_index()
+            add({
+                "id": f"webcam{idx}" if idx != primary_idx else "webcam",
                 "label": label,
                 "kind": "webcam",
                 "active": False,
                 "detail": f"/dev/video{idx}",
                 "go2rtc_stream": "",
                 "detection": bool(cam.get("detection")),
-            })
+            }, ("webcam", str(idx)))
         elif cam_type == "kinect":
-            sources.append({
+            add({
                 "id": "kinect",
                 "label": label,
                 "kind": "kinect",
@@ -146,8 +155,137 @@ def get_live_sources() -> list[dict]:
                 "detail": "Kinect v1",
                 "go2rtc_stream": "",
                 "detection": bool(cam.get("detection")),
-            })
+            }, ("kinect", "0"))
+    if cams:
+        return sources
+
+    preferred = _live_camera_preferred_source()
+    primary_idx = _primary_camera_index()
+    if preferred == "webcam":
+        add({
+            "id": "webcam",
+            "label": "USB / Pi Camera",
+            "kind": "webcam",
+            "active": False,
+            "detail": f"/dev/video{primary_idx}",
+            "go2rtc_stream": "",
+            "detection": True,
+        }, ("webcam", str(primary_idx)))
+    elif preferred == "kinect":
+        add({
+            "id": "kinect",
+            "label": "Kinect",
+            "kind": "kinect",
+            "active": False,
+            "detail": "Kinect v1",
+            "go2rtc_stream": "",
+            "detection": True,
+        }, ("kinect", "0"))
+
+    try:
+        from tapo_control import tapo_configured, tapo_rtsp_url, tapo_settings
+
+        if tapo_configured():
+            tapo = tapo_settings()
+            url = tapo_rtsp_url(tapo)
+            add({
+                "id": "tapo",
+                "label": tapo.get("label") or "Tapo Camera",
+                "kind": "tapo",
+                "active": False,
+                "detail": f"{tapo.get('host', '')} ({tapo.get('stream', 'stream1')})",
+                "go2rtc_stream": "",
+                "detection": preferred == "tapo",
+            }, ("tapo", _normalize_camera_url(url)))
+    except Exception:
+        pass
+
+    for idx, item in enumerate(_configured_ip_sources(include_primary=True), start=1):
+        url = str(item["url"])
+        raw_label = str(item.get("label") or "").strip()
+        label = raw_label or f"IP Camera {idx}"
+        scheme = urlsplit(url).scheme.lower()
+        if scheme == "usb":
+            try:
+                usb_index = int((urlsplit(url).netloc or "0").strip() or "0")
+            except ValueError:
+                usb_index = 0
+            add({
+                "id": "webcam" if usb_index == primary_idx else f"webcam{usb_index}",
+                "label": raw_label or f"USB / Pi Camera {usb_index}",
+                "kind": "webcam",
+                "active": False,
+                "detail": f"/dev/video{usb_index}",
+                "go2rtc_stream": "",
+                "detection": preferred == "webcam" and usb_index == primary_idx,
+            }, ("webcam", str(usb_index)))
+            continue
+        if scheme == "kinect":
+            add({
+                "id": "kinect",
+                "label": raw_label or "Kinect",
+                "kind": "kinect",
+                "active": False,
+                "detail": "Kinect v1",
+                "go2rtc_stream": "",
+                "detection": preferred == "kinect",
+            }, ("kinect", "0"))
+            continue
+        if scheme == "tapo":
+            continue
+        add({
+            "id": f"ip{idx}",
+            "label": label,
+            "kind": "ip",
+            "active": False,
+            "detail": _display_source_url(url),
+            "go2rtc_stream": "",
+            "detection": preferred == "ip" and idx == 1,
+        }, ("ip", _normalize_camera_url(url)))
     return sources
+
+
+def _load_setup_cameras() -> list[dict]:
+    import json
+    try:
+        raw = _live_setting("setup_cameras", "")
+        cams = json.loads(raw) if raw else []
+        return cams if isinstance(cams, list) else []
+    except Exception:
+        return []
+
+
+def _wizard_cam_label(cam: dict, ordinal: int = 1) -> str:
+    label = str(cam.get("label") or "").strip()
+    if label:
+        return label
+    t = str(cam.get("type") or "").strip().lower()
+    if t == "tapo":
+        return "Tapo Camera"
+    if t == "ip":
+        return f"IP Camera {ordinal}"
+    if t == "webcam":
+        return f"USB / Pi Camera {cam.get('index', 0)}"
+    if t == "kinect":
+        return "Kinect"
+    return "Camera"
+
+
+def _setup_camera_stream_url(cam: dict) -> str:
+    t = str(cam.get("type") or "").strip().lower()
+    if t == "ip":
+        return _normalize_camera_url(str(cam.get("url") or ""))
+    if t == "tapo":
+        host = str(cam.get("host") or "").strip()
+        user = str(cam.get("username") or "admin") or "admin"
+        password = str(cam.get("password") or "")
+        stream = str(cam.get("stream") or "stream1").strip().lower()
+        if stream not in {"stream1", "stream2"}:
+            stream = "stream1"
+        if not host or not password:
+            return ""
+        return f"rtsp://{quote(user, safe='')}:{quote(password, safe='')}@{host}:554/{stream}"
+    return ""
 
 
 def _wizard_cam_describe(cam: dict) -> str:
@@ -647,7 +785,7 @@ class CameraLoop:
     # ------------------------------------------------------------------
 
     def _open_camera(self) -> cv2.VideoCapture | None:
-        idx = config.CAMERA_INDEX
+        idx = _primary_camera_index()
         # Try V4L2 backend first (most reliable on Pi OS)
         cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
         if not cap.isOpened():
@@ -1100,7 +1238,7 @@ class CameraLoop:
                 if now - record_all_last_check >= 2.0:
                     new_mode = _live_bool_setting("record_all_mode", False)
                     if record_all_mode and not new_mode:
-                        recorder.signal_unknown_gone()
+                        recorder.stop_continuous_recording("primary")
                     record_all_mode = new_mode
                     record_all_last_check = now
 
@@ -1218,6 +1356,10 @@ def _live_bool_setting(key: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _primary_camera_index() -> int:
+    return max(0, _live_int_setting("camera_index", config.CAMERA_INDEX))
+
+
 def _live_camera_preferred_source() -> str:
     """Returns the configured primary detection source.
 
@@ -1244,16 +1386,21 @@ def _go2rtc_relay_for_primary(cam_type: str) -> str:
 
 def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSourceSpec]:
     preferred = preferred or _live_camera_preferred_source()
+    setup_cams = _load_setup_cameras()
+    if setup_cams:
+        return _setup_detection_source_specs(setup_cams)
+
     specs: list[_CameraSourceSpec] = []
 
     # USB indices are only exposed when the user explicitly configured them
     # in `usb_camera_indices`. Don't probe `/dev/video0` just because
     # CAMERA_INDEX has a default value.
     usb_indices = _configured_usb_indices()
+    primary_idx = _primary_camera_index()
     for index in usb_indices:
-        if preferred == "webcam" and index == config.CAMERA_INDEX:
+        if preferred == "webcam" and index == primary_idx:
             continue
-        source_id = "webcam" if index == config.CAMERA_INDEX else f"webcam{index}"
+        source_id = "webcam" if index == primary_idx else f"webcam{index}"
         specs.append(_CameraSourceSpec(
             id=source_id,
             label=f"USB / Pi Camera {index}",
@@ -1279,7 +1426,7 @@ def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSo
     except Exception:
         pass
 
-    for idx, item in enumerate(_configured_ip_sources(), start=1):
+    for idx, item in enumerate(_configured_ip_sources(include_primary=preferred != "ip"), start=1):
         url = str(item["url"])
         scheme = urlsplit(url).scheme.lower()
         if scheme == "usb":
@@ -1325,6 +1472,60 @@ def _live_auxiliary_source_specs(preferred: str | None = None) -> list[_CameraSo
                 options=dict(item.get("options") or {}),
             ))
     return specs
+
+
+def _setup_detection_source_specs(cams: list[dict]) -> list[_CameraSourceSpec]:
+    detection_cams = [cam for cam in cams if cam.get("detection")]
+    if len(detection_cams) <= 1:
+        return []
+
+    specs: list[_CameraSourceSpec] = []
+    for ordinal, cam in enumerate(detection_cams[1:], start=2):
+        spec = _setup_camera_detection_spec(cam, ordinal)
+        if spec is not None:
+            specs.append(spec)
+    return specs
+
+
+def _setup_camera_detection_spec(cam: dict, ordinal: int) -> _CameraSourceSpec | None:
+    cam_id = str(cam.get("id") or f"setup_{ordinal}").strip()
+    source_id = f"cam_{cam_id}" if not cam_id.startswith("cam_") else cam_id
+    cam_type = str(cam.get("type") or "").strip().lower()
+    label = _wizard_cam_label(cam, ordinal)
+    if cam_type == "webcam":
+        try:
+            index = max(0, int(cam.get("index", 0)))
+        except (TypeError, ValueError):
+            index = 0
+        return _CameraSourceSpec(
+            id=source_id,
+            label=label,
+            kind="webcam",
+            detail=f"index {index}",
+            index=index,
+        )
+    if cam_type == "kinect":
+        return _CameraSourceSpec(
+            id=source_id,
+            label=label,
+            kind="kinect",
+            detail="RGB/IR (hardware)",
+            index=0,
+        )
+    if cam_type in {"ip", "tapo"}:
+        url = _setup_camera_stream_url(cam)
+        if not _is_supported_camera_url(url):
+            return None
+        options = cam.get("options") if isinstance(cam.get("options"), dict) else {}
+        return _CameraSourceSpec(
+            id=source_id,
+            label=label,
+            kind="ip",
+            detail=_display_source_url(url),
+            url=url,
+            options=dict(options),
+        )
+    return None
 
 
 def _configured_usb_indices() -> list[int]:
@@ -1520,8 +1721,10 @@ def _set_ffmpeg_capture_options(url: str, transport: str | None = None) -> None:
 
 
 def _looks_like_hls_url(url: str) -> bool:
-    path = urlsplit(url).path.lower()
-    return path.endswith((".m3u8", ".m3u"))
+    parts = urlsplit(url)
+    path = parts.path.lower()
+    query = parts.query.lower()
+    return path.endswith((".m3u8", ".m3u")) or ".m3u8" in path or "m3u8" in query
 
 
 def _default_http_camera_user_agent() -> str:
@@ -1729,7 +1932,7 @@ def _set_camera_exposure(cap: cv2.VideoCapture, night: bool) -> None:
             # Also set via v4l2-ctl — some cameras ignore OpenCV props
             v4l2 = shutil.which("v4l2-ctl")
             if v4l2:
-                dev = f"/dev/video{config.CAMERA_INDEX}"
+                dev = f"/dev/video{_primary_camera_index()}"
                 subprocess.run(
                     [v4l2, "-d", dev,
                      "--set-ctrl=auto_exposure=1",
@@ -1744,7 +1947,7 @@ def _set_camera_exposure(cap: cv2.VideoCapture, night: bool) -> None:
             cap.set(cv2.CAP_PROP_GAIN, 0)
             v4l2 = shutil.which("v4l2-ctl")
             if v4l2:
-                dev = f"/dev/video{config.CAMERA_INDEX}"
+                dev = f"/dev/video{_primary_camera_index()}"
                 subprocess.run(
                     [v4l2, "-d", dev, "--set-ctrl=auto_exposure=3"],
                     capture_output=True, timeout=2
@@ -2062,6 +2265,23 @@ def generate_mjpeg(source_id: str = "primary"):
             time.sleep(0.05)  # ~20 FPS max to browser
         return
 
+    setup_match = _setup_camera_for_source_id(source_id)
+    if setup_match is not None:
+        cam, ordinal = setup_match
+        cam_type = str(cam.get("type") or "").strip().lower()
+        label = _wizard_cam_label(cam, ordinal)
+        if cam_type == "ip":
+            options = cam.get("options") if isinstance(cam.get("options"), dict) else {}
+            yield from _generate_ip_mjpeg(
+                _setup_camera_stream_url(cam),
+                label,
+                http_options=dict(options),
+            )
+            return
+        if cam_type == "tapo":
+            yield from _generate_capture_mjpeg(_setup_camera_stream_url(cam), label=label)
+            return
+
     webcam_index = _parse_webcam_source_id(source_id)
     if webcam_index is not None:
         yield from _generate_capture_mjpeg(webcam_index, label=f"USB webcam {webcam_index}")
@@ -2106,14 +2326,22 @@ def generate_mjpeg(source_id: str = "primary"):
     yield from _generate_error_mjpeg()
 
 
+def _setup_camera_for_source_id(source_id: str) -> tuple[dict, int] | None:
+    for ordinal, cam in enumerate(_load_setup_cameras(), start=1):
+        cam_id = str(cam.get("id") or "").strip()
+        if (cam_id and source_id == f"cam_{cam_id}") or source_id == f"setup_{ordinal}":
+            return cam, ordinal
+    return None
+
+
 def _parse_webcam_source_id(source_id: str) -> int | None:
     if source_id == "webcam":
-        return config.CAMERA_INDEX
+        return _primary_camera_index()
     if not source_id.startswith("webcam"):
         return None
     suffix = source_id[6:]
     if not suffix:
-        return config.CAMERA_INDEX
+        return _primary_camera_index()
     try:
         return int(suffix)
     except ValueError:
